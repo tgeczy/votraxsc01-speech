@@ -43,6 +43,18 @@ function Invoke-CL([string]$Arch, [string[]]$Flags) {
     if ($LASTEXITCODE) { throw "cl.exe ($Arch) failed with $LASTEXITCODE" }
 }
 
+# VERSIONINFO resources: unsigned binaries with no version metadata score
+# worse with antivirus reputation heuristics (the SAPI installer drew a
+# Defender false positive on release day).  Compile once per project.
+$rcExe = Join-Path (Split-Path (Split-Path $sdk.FullName)) "bin\$($sdk.Name)\x64\rc.exe"
+function Build-Res([string]$Name) {
+    $res = "$OutDir\obj\$Name.res"
+    & $rcExe /nologo "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" `
+        /fo $res "$PSScriptRoot\src\rc\$Name.rc"
+    if ($LASTEXITCODE) { throw "rc.exe failed on $Name.rc" }
+    return $res
+}
+
 function Assert-StaticCRT([string]$Binary) {
     $dumpbin = Join-Path $msvc.FullName "bin\Hostx64\x64\dumpbin.exe"
     $deps = & $dumpbin /dependents $Binary | Out-String
@@ -72,16 +84,18 @@ $cxx = @("/nologo", "/std:c++20", "/EHsc", "/O2", "/MT", "/W3", "/DUNICODE", "/D
 New-Item -ItemType Directory -Force $OutDir, "$OutDir\x64", "$OutDir\x86", "$OutDir\obj" | Out-Null
 
 if ($Target -in "probe", "all") {
+    $res = Build-Res "say01"
     Invoke-CL x64 ($cxx + $inc + @("$PSScriptRoot\tools\say01.c") + $core +
-        @("/Fe$OutDir\say01.exe", "/Fo$OutDir\obj\", "/link"))
+        @("/Fe$OutDir\say01.exe", "/Fo$OutDir\obj\", "/link", $res))
     Assert-StaticCRT "$OutDir\say01.exe"
     Write-Host "built $OutDir\say01.exe"
 }
 
 if ($Target -in "dll", "all") {
+    $res = Build-Res "sc01_dll"
     foreach ($arch in "x64", "x86") {
         Invoke-CL $arch ($cxx + @("/LD", "/DVX_BUILD_DLL") + $inc + $core +
-            @("/Fe$OutDir\$arch\sc01.dll", "/Fo$OutDir\obj\", "/link"))
+            @("/Fe$OutDir\$arch\sc01.dll", "/Fo$OutDir\obj\", "/link", $res))
         Assert-StaticCRT "$OutDir\$arch\sc01.dll"
         Write-Host "built $OutDir\$arch\sc01.dll"
     }
@@ -107,10 +121,11 @@ if ($Target -in "sapi", "all") {
     # The SAPI engine links the chip statically: one DLL per architecture,
     # no dependency chain.  Both architectures matter -- 32-bit hosts
     # (JAWS, older SAPI apps) load the x86 voice, 64-bit hosts the x64.
+    $res = Build-Res "sapi_dll"
     foreach ($arch in "x64", "x86") {
         Invoke-CL $arch ($cxx + @("/LD") + $inc +
             @("$PSScriptRoot\sapi\votrax_sapi.cpp") + $core +
-            @("/Fe$OutDir\$arch\votrax_sapi.dll", "/Fo$OutDir\obj\", "/link",
+            @("/Fe$OutDir\$arch\votrax_sapi.dll", "/Fo$OutDir\obj\", "/link", $res,
               "/DEF:$PSScriptRoot\sapi\votrax_sapi.def",
               "sapi.lib", "ole32.lib", "advapi32.lib", "user32.lib"))
         Assert-StaticCRT "$OutDir\$arch\votrax_sapi.dll"

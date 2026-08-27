@@ -18,7 +18,7 @@
 #ifndef StageDir
 #define StageDir "..\build"
 #endif
-#define AppVer "1.0.0"
+#define AppVer "1.0.1"
 
 [Setup]
 AppId={{E5A0B7C2-5C01-4F6D-8B2A-90D1C4E7F3A8}
@@ -35,6 +35,15 @@ OutputDir={#StageDir}\out
 OutputBaseFilename=votraxsc01-{#AppVer}-setup
 DisableProgramGroupPage=yes
 UninstallDisplayName=Votrax SC-01 speech {#AppVer}
+; Full version metadata: unsigned binaries with no VERSIONINFO score
+; worse with Defender's reputation heuristics, and this installer was
+; flagged as a false positive on day one.  Metadata alone doesn't clear
+; it, but every legitimacy signal helps while download reputation builds.
+VersionInfoVersion={#AppVer}.0
+VersionInfoDescription=Votrax SC-01 speech voices installer
+VersionInfoProductName=Votrax SC-01 speech
+VersionInfoCompany=tgeczy
+VersionInfoCopyright=BSD-3-Clause; engine core (c) MAME project
 
 [Files]
 Source: "{#StageDir}\x86\votrax_sapi.dll"; DestDir: "{app}\x86"
@@ -42,6 +51,11 @@ Source: "{#StageDir}\x64\votrax_sapi.dll"; DestDir: "{app}\x64"; Check: Is64BitI
 Source: "{#StageDir}\say01.exe"; DestDir: "{app}"
 Source: "{#StageDir}\votraxsc01-{#AppVer}.nvda-addon"; DestDir: "{app}"
 Source: "..\roms\README.md"; DestDir: "{app}"; DestName: "ROMS-README.md"
+; A static, versioned file -- NOT generated at install time.  Writing a
+; fresh batch script from installer code and pointing a Start-menu entry
+; at it is textbook dropper behavior to an antivirus heuristic, and was
+; a likely contributor to the day-one Defender false positive.
+Source: "register.cmd"; DestDir: "{app}"
 ; ROMs staged by the build (release policy: bundles carry them, the git
 ; repository never does -- see roms/README.md for the orphan-work status).
 Source: "{#StageDir}\x86\sc01.bin"; DestDir: "{app}\x86"; Flags: skipifsourcedoesntexist
@@ -59,25 +73,10 @@ Source: "{src}\sc01a.bin"; DestDir: "{app}\x64"; Flags: external skipifsourcedoe
 Name: "{autoprograms}\Re-register Votrax voices"; Filename: "{app}\register.cmd"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\register.cmd"; StatusMsg: "Registering Votrax voices..."; Flags: runhidden
+; regsvr32 invoked directly, not through a shell script.
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\x64\votrax_sapi.dll"""; StatusMsg: "Registering 64-bit voices..."; Check: Is64BitInstallMode
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\x86\votrax_sapi.dll"""; StatusMsg: "Registering 32-bit voices..."
 
 [UninstallRun]
 Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\x64\votrax_sapi.dll"""; RunOnceId: "Unreg64"; Check: Is64BitInstallMode
 Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{app}\x86\votrax_sapi.dll"""; RunOnceId: "Unreg32"
-
-[Code]
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  Lines: TArrayOfString;
-begin
-  if CurStep = ssPostInstall then begin
-    // register.cmd re-registers both views; kept as a file so the
-    // Start-menu entry can re-run it after ROMs are added later.
-    SetArrayLength(Lines, 4);
-    Lines[0] := '@echo off';
-    Lines[1] := 'if exist "%~dp0x64\votrax_sapi.dll" %windir%\System32\regsvr32.exe /s "%~dp0x64\votrax_sapi.dll"';
-    Lines[2] := 'if exist "%~dp0x86\votrax_sapi.dll" if exist %windir%\SysWOW64\regsvr32.exe %windir%\SysWOW64\regsvr32.exe /s "%~dp0x86\votrax_sapi.dll"';
-    Lines[3] := 'exit /b 0';
-    SaveStringsToFile(ExpandConstant('{app}\register.cmd'), Lines, False);
-  end;
-end;
