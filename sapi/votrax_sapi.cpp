@@ -39,6 +39,7 @@
 
 #include "sc01.h"
 #include "text_to_votrax.h"
+#include "timestretch.h"
 
 // {F0C7A2B4-5C01-4D8E-A0B3-7E0193C1D2E4}  ("5C01" on purpose)
 static const CLSID CLSID_VotraxSC01 =
@@ -164,10 +165,11 @@ public:
 		if (!m_chip)
 			return;
 
-		// Rate 10 = double clock = double speed (and higher pitch): how
-		// the hardware did it, so how we do it.
-		double mult = std::pow(2.0, (double)rate_adj / 10.0);
-		vx_set_clock(m_chip, (uint32_t)(VX_DEFAULT_CLOCK * mult + 0.5));
+		// The chip renders at its datasheet clock; SAPI rate becomes
+		// constant-pitch time scaling afterwards.  (The 1980 way -- rate
+		// as clock, chipmunk included -- lives on in the NVDA add-on's
+		// "authentic rate" option and say01's --clock.)
+		vx_set_clock(m_chip, VX_DEFAULT_CLOCK);
 		vx_inflection(m_chip, (uint8_t)inflection);
 
 		std::string utf8 = narrow(text);
@@ -208,8 +210,20 @@ public:
 			native.insert(native.end(), block, block + got);
 		}
 
+		// Rate 10 = double speed, pitch unchanged.
+		if (rate_adj != 0 && !native.empty()) {
+			double speed = std::pow(2.0, (double)rate_adj / 10.0);
+			std::vector<short> scaled(native.size() * 3 + FRAME_SLACK);
+			int n = vxs_stretch_buffer(native.data(), (int)native.size(),
+				speed, scaled.data(), (int)scaled.size());
+			scaled.resize(n);
+			native.swap(scaled);
+		}
+
 		resample(native, vx_sample_rate(m_chip), volume, out);
 	}
+
+	static const int FRAME_SLACK = 2048;
 
 	std::string last_error;
 

@@ -54,9 +54,11 @@ function Assert-StaticCRT([string]$Binary) {
 # The four rules files from the USENIX 1987 tape compile byte-identical;
 # only parse.c was replaced (by wasser_parse.c) -- see THIRD_PARTY_LICENSES.
 $core = @("$PSScriptRoot\src\core\sc01.cpp",
+          "$PSScriptRoot\src\core\timestretch.c",
           "$PSScriptRoot\src\frontend\text_to_votrax.c",
           "$PSScriptRoot\src\frontend\wasser_parse.c",
           "$PSScriptRoot\src\frontend\arpabet_to_sc01.c",
+          "$PSScriptRoot\src\frontend\exceptions.c",
           "$PSScriptRoot\third_party\wasser\english.c",
           "$PSScriptRoot\third_party\wasser\phoneme.c",
           "$PSScriptRoot\third_party\wasser\saynum.c",
@@ -92,6 +94,8 @@ if ($Target -in "test", "all") {
     if (Test-Path $py) {
         & $py "$PSScriptRoot\tests\frontend_test.py"
         if ($LASTEXITCODE) { throw "frontend golden tests failed" }
+        & $py "$PSScriptRoot\tests\stretch_test.py"
+        if ($LASTEXITCODE) { throw "stretch tests failed" }
         & $py "$PSScriptRoot\tests\chip_test.py"
         if ($LASTEXITCODE) { throw "chip tests failed" }
     } else {

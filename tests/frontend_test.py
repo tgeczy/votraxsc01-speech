@@ -60,6 +60,24 @@ CASES = [
 	 "R UH B B ER PA0 B A AY B E PA0 B UH G E PA0 B UH M P ER Z PA0"),
 	("NVDA", True,
 	 "EH N PA0 V E PA0 D E PA0 A AY PA0"),
+	# The exception dictionary (exceptions.c): each entry was measured
+	# broken through the 1976 rules, and its respelling measured correct.
+	("search", False,
+	 "S ER T CH PA0"),
+	("searching", False,
+	 "S ER T CH I NG PA0"),
+	("research", False,
+	 "R E Z ER T CH PA0"),
+	("heard", False,
+	 "H ER D PA0"),
+	("bear", False,
+	 "B EH R PA0"),
+	("wear", False,
+	 "W EH R PA0"),
+	# ...and a neighbor the rules already got right, pinned so the
+	# dictionary can never overreach.
+	("earth", False,
+	 "ER TH PA0"),
 ]
 
 

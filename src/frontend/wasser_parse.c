@@ -125,8 +125,18 @@ static void have_letter(void)
 		say_ascii(buff[1]);          /* single letter */
 	else if (Char == '.')
 		abbrev(buff);
-	else
-		xlate_word(buff);
+	else {
+		/* The exception dictionary (exceptions.c) supplies measured
+		 * respellings for words the 1976 rules get wrong. */
+		extern const char *ttv_exception(const char *spaced_word);
+		const char *ex = ttv_exception(buff);
+		if (ex) {
+			char respelled[MAX_LENGTH];
+			strcpy(respelled, ex);
+			xlate_word(respelled);
+		} else
+			xlate_word(buff);
+	}
 
 	if (Char == '-' && ISALPH(Char1))
 		new_char();                  /* skip hyphens inside words */

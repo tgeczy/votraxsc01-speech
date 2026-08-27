@@ -29,6 +29,7 @@ import os
 import queue
 import threading
 
+from autoSettingsUtils.driverSetting import BooleanDriverSetting
 import config
 import nvwave
 from speech.commands import IndexCommand, CharacterModeCommand
@@ -82,6 +83,12 @@ class _Chip:
 			("vx_render", ctypes.c_int, [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]),
 			("ttv_translate", ctypes.c_int, [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]),
 			("ttv_spell", ctypes.c_int, [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]),
+			("vxs_create", p, []),
+			("vxs_destroy", None, [p]),
+			("vxs_reset", None, [p]),
+			("vxs_set_speed", None, [p, ctypes.c_double]),
+			("vxs_feed", None, [p, ctypes.c_char_p, ctypes.c_int]),
+			("vxs_pull", ctypes.c_int, [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]),
 		):
 			fn = getattr(lib, name)
 			fn.restype, fn.argtypes = res, args
@@ -116,6 +123,28 @@ class _Chip:
 	def render(self, count):
 		buf = (ctypes.c_int16 * count)()
 		n = self._lib.vx_render(self._chip, buf, count)
+		return ctypes.string_at(buf, n * 2)
+
+	# -- the time stretcher lives in the same DLL; thin pass-throughs --
+
+	def stretch_create(self):
+		return self._lib.vxs_create()
+
+	def stretch_destroy(self, s):
+		self._lib.vxs_destroy(s)
+
+	def stretch_reset(self, s):
+		self._lib.vxs_reset(s)
+
+	def stretch_speed(self, s, speed):
+		self._lib.vxs_set_speed(s, speed)
+
+	def stretch_feed(self, s, data):
+		self._lib.vxs_feed(s, data, len(data) // 2)
+
+	def stretch_pull(self, s, count):
+		buf = (ctypes.c_int16 * count)()
+		n = self._lib.vxs_pull(s, buf, count)
 		return ctypes.string_at(buf, n * 2)
 
 	def translate(self, text, spell=False):
@@ -186,6 +215,16 @@ class SynthDriver(BaseSynthDriver):
 		BaseSynthDriver.VoiceSetting(),
 		BaseSynthDriver.RateSetting(),
 		BaseSynthDriver.PitchSetting(minStep=25),   # four real hardware levels
+		# Rate is constant-pitch time scaling by default.  This box brings
+		# back the hardware truth: rate as master clock, where faster is
+		# also higher -- the chipmunk the 1980 knob actually made.
+		BooleanDriverSetting(
+			"authenticRate",
+			# Translators: a Votrax driver setting: rate varies the chip
+			# clock, changing pitch with speed, as the real hardware did.
+			_("&Authentic rate (vary the chip clock; pitch rises with speed)"),
+			defaultVal=False,
+		),
 	)
 	supportedCommands = {IndexCommand, CharacterModeCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
@@ -203,6 +242,9 @@ class SynthDriver(BaseSynthDriver):
 		self._player_rate = 0
 		self._rate = 50
 		self._pitch = 50
+		self._authentic = False
+		self._stretch = None
+		self._stretch_epoch = -1
 		self._epoch = 0
 		self._queue = queue.Queue()
 		_migrate_roms()
@@ -221,6 +263,9 @@ class SynthDriver(BaseSynthDriver):
 		if self._player:
 			self._player.close()
 			self._player = None
+		if self._stretch and self._chip:
+			self._chip.stretch_destroy(self._stretch)
+			self._stretch = None
 		if self._chip:
 			self._chip.close()
 			self._chip = None
@@ -236,6 +281,8 @@ class SynthDriver(BaseSynthDriver):
 			rom = f.read()
 		old = self._chip
 		self._chip = _Chip(variant, rom)
+		if self._stretch is None:
+			self._stretch = self._chip.stretch_create()
 		self._apply_rate()
 		self._apply_pitch()
 		self._ensure_player()
@@ -254,9 +301,19 @@ class SynthDriver(BaseSynthDriver):
 				old.close()
 
 	def _apply_rate(self):
-		# 0..100 -> half to double the datasheet clock, exponentially, so
-		# equal slider steps sound like equal speed ratios.
-		self._chip.set_clock(_BASE_CLOCK * (2.0 ** ((self._rate - 50) / 50.0)))
+		# 0..100 -> half to double speed, exponentially, so equal slider
+		# steps sound like equal speed ratios.  Two regimes:
+		#   default   -- the chip runs at its datasheet clock and the
+		#                stretcher changes speed at constant pitch;
+		#   authentic -- rate IS the master clock, pitch and all, as the
+		#                1980 hardware's one knob really behaved.
+		factor = 2.0 ** ((self._rate - 50) / 50.0)
+		if self._authentic:
+			self._chip.set_clock(_BASE_CLOCK * factor)
+			self._chip.stretch_speed(self._stretch, 1.0)
+		else:
+			self._chip.set_clock(_BASE_CLOCK)
+			self._chip.stretch_speed(self._stretch, factor)
 
 	def _apply_pitch(self):
 		# Quantize NVDA's 0..100 onto the chip's four inflection levels.
@@ -294,6 +351,13 @@ class SynthDriver(BaseSynthDriver):
 	def _set_pitch(self, value):
 		self._pitch = max(0, min(100, value))
 		self._queue.put((None, "pitch", None, None))
+
+	def _get_authenticRate(self):
+		return self._authentic
+
+	def _set_authenticRate(self, value):
+		self._authentic = bool(value)
+		self._queue.put((None, "rate", None, None))
 
 	# ---- speaking ----------------------------------------------------
 
@@ -362,6 +426,25 @@ class SynthDriver(BaseSynthDriver):
 					self._player.idle()
 					synthDoneSpeaking.notify(synth=self)
 
+	def _push_audio(self, data, epoch):
+		"""Chip output to the player, through the stretcher by default.
+
+		A new epoch drops whatever the stretcher was holding: after a
+		cancel, half-processed old speech must not leak into the next
+		utterance."""
+		if self._stretch_epoch != epoch:
+			self._chip.stretch_reset(self._stretch)
+			self._stretch_epoch = epoch
+		if self._authentic:
+			self._player.feed(data)
+			return
+		self._chip.stretch_feed(self._stretch, data)
+		while True:
+			out = self._chip.stretch_pull(self._stretch, 4096)
+			if not out:
+				break
+			self._player.feed(out)
+
 	def _feed(self, phones, epoch):
 		"""Feed phonemes as the chip asks for them, streaming the audio.
 
@@ -373,11 +456,13 @@ class SynthDriver(BaseSynthDriver):
 		while pending and epoch == self._epoch:
 			if self._chip.ready():
 				self._chip.write(pending.pop(0))
-			self._player.feed(self._chip.render(block))
+			self._push_audio(self._chip.render(block), epoch)
 
 	def _render_tail(self, epoch, seconds):
+		# The rendered silence also flushes the stretcher's ~26 ms of
+		# lookahead, so the utterance's true ending is always heard.
 		block = max(1, int(self._chip.sample_rate * 0.012))
 		for _ in range(int(seconds / 0.012) + 1):
 			if epoch != self._epoch:
 				return
-			self._player.feed(self._chip.render(block))
+			self._push_audio(self._chip.render(block), epoch)
