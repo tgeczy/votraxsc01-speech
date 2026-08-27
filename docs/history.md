@@ -35,6 +35,18 @@ Two details of the era are preserved in this project's design:
   through Jayson Smith's EchoTalk add-on, the SC-01 through this one, on
   the same screen reader.
 
+## What the mask revision actually changed
+
+With both ROM dumps in hand, the SC-01 vs SC-01-A question stops being
+folklore: the two masks differ in **12 of 64 phone entries, and every
+difference is the same nibble — `va`, voice amplitude**. The A revision
+turned down the open vowels: AH, AH1, AH2 from 15 to 9 (about 4.4 dB),
+AE, AE1, AW, AW1, AW2 from 15 to 11, UH, UH1, UH2, UH3 from 15 to 14.
+No formant, duration, or filter parameter moved. The revision was a
+loudness-balance fix, which is why the two "voices" are nearly
+indistinguishable by ear — and why both still ship here: the difference
+is real, it is just honest about being small.
+
 The simulation this repository carries is MAME's: Olivier Galibert's
 model of the decapped SC-01 die, filters built from the patent schematics,
 the internal 512-byte phone ROM read out of the silicon itself. It is the

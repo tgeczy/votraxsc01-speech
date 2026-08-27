@@ -63,6 +63,36 @@ def main():
 		failures += 1
 		print(f"FAIL unity speed: {len(out)} samples out of {n} (expected passthrough)")
 
+	# Regression: streaming feed at speeds past (FRAME+SEARCH)/HOP ~ 1.54,
+	# where the analysis head can overshoot the input buffer.  Unclamped,
+	# the trim's length went negative and the memmove killed the host
+	# process (observed live: NVDA rate 100 crashed, rate 80 did not).
+	# The driver's real pattern: many ~12 ms blocks, pulling as we go.
+	lib.vxs_create.restype = ctypes.c_void_p
+	lib.vxs_destroy.argtypes = [ctypes.c_void_p]
+	lib.vxs_set_speed.argtypes = [ctypes.c_void_p, ctypes.c_double]
+	lib.vxs_feed.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]
+	lib.vxs_pull.restype = ctypes.c_int
+	lib.vxs_pull.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]
+	for speed in (1.6, 2.0, 3.0):
+		s = lib.vxs_create()
+		lib.vxs_set_speed(s, speed)
+		got = 0
+		block = (ctypes.c_int16 * 480)(*([1000] * 480))
+		pull = (ctypes.c_int16 * 4096)()
+		for _ in range(300):                      # ~3.6 s of feed
+			lib.vxs_feed(s, block, 480)
+			while True:
+				m = lib.vxs_pull(s, pull, 4096)
+				got += m
+				if not m:
+					break
+		lib.vxs_destroy(s)
+		want = 300 * 480 / speed
+		if not (0.8 * want < got < 1.2 * want):
+			failures += 1
+			print(f"FAIL streaming speed {speed}: {got} samples, wanted ~{int(want)}")
+
 	if failures:
 		print(f"stretch: {failures} failure(s)")
 		return 1

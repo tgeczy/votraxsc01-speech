@@ -144,8 +144,16 @@ static void process(vx_stretch *s)
 		s->ana_pos += HOP * s->speed;
 	}
 
-	/* Trim consumed input so the FIFO stays bounded. */
+	/* Trim consumed input so the FIFO stays bounded.  The analysis head
+	 * can legitimately overshoot the buffer end: the last step advances
+	 * by HOP * speed from a position up to in_len - FRAME - SEARCH, so
+	 * for speed > (FRAME + SEARCH) / HOP (~1.54) ana_pos may exceed
+	 * in_len.  Unclamped, that made this memmove's length negative --
+	 * a size_t catastrophe that killed the host process at NVDA rate
+	 * 100 while rate 80 was fine.  Clamp before trimming. */
 	int keep_from = (int)s->ana_pos - SEARCH;
+	if (keep_from > s->in_len)
+		keep_from = s->in_len;
 	if (keep_from > FRAME) {
 		memmove(s->in, s->in + keep_from,
 		        (size_t)(s->in_len - keep_from) * sizeof(int16_t));
