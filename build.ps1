@@ -89,6 +89,8 @@ if ($Target -in "sapi", "all") {
               "sapi.lib", "ole32.lib", "advapi32.lib", "user32.lib"))
         Assert-StaticCRT "$OutDir\$arch\votrax_sapi.dll"
         Write-Host "built $OutDir\$arch\votrax_sapi.dll"
+        Get-ChildItem "$PSScriptRoot\roms\*.bin" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination "$OutDir\$arch\"
     }
 }
 
@@ -100,6 +102,11 @@ if ($Target -in "addon", "all") {
     Copy-Item -Recurse "$PSScriptRoot\nvda-addon" $stage
     Copy-Item "$OutDir\x64\sc01.dll" "$stage\synthDrivers\votraxsc01\sc01-x64.dll"
     Copy-Item "$OutDir\x86\sc01.dll" "$stage\synthDrivers\votraxsc01\sc01-x86.dll"
+    # Release policy (the PC-ROBOT/BraiLab convention): the repo never
+    # carries the ROM dumps, but a release build on a machine that has them
+    # in roms\ ships them inside the bundle, under MAME's licensing note.
+    Get-ChildItem "$PSScriptRoot\roms\*.bin" -ErrorAction SilentlyContinue |
+        Copy-Item -Destination "$stage\synthDrivers\votraxsc01\"
     $manifest = Get-Content "$stage\manifest.ini" | Where-Object { $_ -match '^version = (.+)$' }
     $version = $Matches[1]
     $bundle = "$OutDir\votraxsc01-$version.nvda-addon"

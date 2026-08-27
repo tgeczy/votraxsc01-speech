@@ -15,3 +15,11 @@ contains the chip (`votrtnt`, `votrpss`, `gorf`, `qbert`, …). Every loader
 in this project verifies the CRC before starting the chip and names the
 expected value when it refuses, so a wrong file can never produce silently
 wrong audio.
+
+**Distribution policy** (the same one this author's PC-ROBOT and BraiLab
+preservation work follows): this *repository* never carries the dumps —
+they are not our work, and their copyright, while almost certainly
+ownerless after four decades, is uncleared. *Release* bundles built on a
+machine that has the files here in `roms/` do include them, carrying
+MAME's licensing and provenance notes, so end users get voices that speak
+out of the box. Being careful and being useful are both possible.

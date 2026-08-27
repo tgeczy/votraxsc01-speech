@@ -194,6 +194,14 @@ public:
 			native.insert(native.end(), block, block + got);
 			rendered += got;
 		}
+		// The last phoneme has only been *written*; let it finish sounding
+		// (ready re-asserts at end of phone) before STOP cuts in, or every
+		// utterance loses its final phone.
+		while (!vx_ready(m_chip) && rendered < ceiling) {
+			int got = vx_render(m_chip, block, 512);
+			native.insert(native.end(), block, block + got);
+			rendered += got;
+		}
 		vx_write(m_chip, VX_PHONE_STOP);
 		for (int tail = 0; tail < (int)(vx_sample_rate(m_chip) / 4); tail += 512) {
 			int got = vx_render(m_chip, block, 512);
