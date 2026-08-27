@@ -1,0 +1,4 @@
+build/
+*.wav
+*.obj
+roms/*.bin
