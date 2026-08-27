@@ -20,5 +20,36 @@ future MAME improvements can be picked up by copying the two files again.
 
 The whole of this repository is BSD-3-Clause in MAME's honor; see LICENSE.
 
-(Further third-party entries — e.g. the text-to-phoneme lineage — are added
-here as they are vendored, each with its provenance and verbatim license.)
+## Wasser English-to-phoneme translation (the NRL rules in C)
+
+`third_party/wasser/english.c`, `phoneme.c`, `saynum.c`, `spellword.c`
+(plus the `AUTHOR` and `BUGS` postings, and `parse.c.orig` for reference)
+are **John A. Wasser's** "English to Phoneme translation", posted to
+net.sources on 15 April 1985 (Message-ID `<1679@decwrl.UUCP>`, "Final
+English-to-Phoneme version!"), vendored **byte-identical** from the
+USENIX 1987 tape (github.com/sergev/Usenix_Tapes,
+`usenix87/Utilities/Phoneme/`). It implements the letter-to-sound rules
+of NRL Report 7948.
+
+License, verbatim from the author's own posting:
+
+> If you make a major addition (like better abbreviation handling or an
+> exception dictionary) please send me a copy.  As before, this is all
+> public domain and I make no copyright claims on it.  The part derived
+> from the Naval Research Lab should be public anyway.  Sell it if you
+> can!  -John A. Wasser
+
+Only `parse.c` (file I/O and `main()`) is not compiled as-is: it is
+replaced by `src/frontend/wasser_parse.c`, a string-driven adaptation
+that preserves its word-assembly logic and is public domain following its
+source. The CMU AI Repository catalog independently records this package
+as "Copying: Public Domain".
+
+## NRL Report 7948 (the rules themselves)
+
+The letter-to-sound rules and the IPA-to-Votrax translation rules
+transliterated in `src/frontend/arpabet_to_sc01.c` come from *Automatic
+Translation of English Text to Phonetics by Means of Letter-to-Sound
+Rules* (Elovitz, Johnson, McHugh & Shore, NRL Report 7948, 1976,
+AD/A021 929) — a work of the United States Government, public domain
+under 17 USC 105.

@@ -51,8 +51,16 @@ function Assert-StaticCRT([string]$Binary) {
     }
 }
 
+# The four rules files from the USENIX 1987 tape compile byte-identical;
+# only parse.c was replaced (by wasser_parse.c) -- see THIRD_PARTY_LICENSES.
 $core = @("$PSScriptRoot\src\core\sc01.cpp",
           "$PSScriptRoot\src\frontend\text_to_votrax.c",
+          "$PSScriptRoot\src\frontend\wasser_parse.c",
+          "$PSScriptRoot\src\frontend\arpabet_to_sc01.c",
+          "$PSScriptRoot\third_party\wasser\english.c",
+          "$PSScriptRoot\third_party\wasser\phoneme.c",
+          "$PSScriptRoot\third_party\wasser\saynum.c",
+          "$PSScriptRoot\third_party\wasser\spellword.c",
           "$PSScriptRoot\third_party\mame\votrax.cpp")
 # /wd4244 and /wd4805 mirror MAME's own build settings for its sources
 # (bitswap narrowing into u8 registers is idiomatic there, not a bug).
@@ -74,6 +82,20 @@ if ($Target -in "dll", "all") {
             @("/Fe$OutDir\$arch\sc01.dll", "/Fo$OutDir\obj\", "/link"))
         Assert-StaticCRT "$OutDir\$arch\sc01.dll"
         Write-Host "built $OutDir\$arch\sc01.dll"
+    }
+}
+
+if ($Target -in "test", "all") {
+    # The frontend gate runs everywhere (no ROM needed); the chip gate is
+    # real where a ROM exists and announces its skip where none does.
+    $py = "C:\Python313\python.exe"
+    if (Test-Path $py) {
+        & $py "$PSScriptRoot\tests\frontend_test.py"
+        if ($LASTEXITCODE) { throw "frontend golden tests failed" }
+        & $py "$PSScriptRoot\tests\chip_test.py"
+        if ($LASTEXITCODE) { throw "chip tests failed" }
+    } else {
+        Write-Host "tests skipped: no Python at $py"
     }
 }
 

@@ -119,22 +119,55 @@ class _Chip:
 		return ctypes.string_at(buf, n * 2)
 
 	def translate(self, text, spell=False):
-		# ttv_* are stateless pure functions, so calling them from the main
-		# thread while the speak thread renders is safe by construction.
+		# ttv_* run the 1985 engine, which lives on globals and is NOT
+		# reentrant -- but NVDA only ever calls speak() from its main
+		# thread, and the speak thread never translates, so the contract
+		# holds without a lock.  (The chip functions are a disjoint state.)
 		out = ctypes.create_string_buffer(4096)
 		fn = self._lib.ttv_spell if spell else self._lib.ttv_translate
 		n = fn(text.encode("utf-8", "replace"), out, 4096)
 		return bytes(out.raw[:n])
 
 
+def _data_dir():
+	"""The persistent ROM home: <NVDA user config>\\votrax-data.
+
+	Add-on updates replace the add-on's own folder wholesale, so anything
+	living only there is lost on every update.  A sibling of the config's
+	synthDrivers folder survives updates, reinstalls and portable copies --
+	the same pattern panthera uses for its speech data."""
+	return os.path.join(config.getUserDefaultConfigPath() or _DIR, "votrax-data")
+
+
 def _find_rom(filename):
-	"""ROMs live beside the driver or in the user config's synthDrivers
-	folder; returning None (not raising) lets check() stay quiet."""
-	for base in (_DIR, os.path.join(config.getUserDefaultConfigPath() or "", "synthDrivers")):
+	"""Search order: the persistent data folder, then the add-on folder
+	(where release bundles carry the ROMs), then the legacy synthDrivers
+	spot.  Returning None (not raising) lets check() stay quiet."""
+	for base in (_data_dir(), _DIR,
+			os.path.join(config.getUserDefaultConfigPath() or "", "synthDrivers")):
 		path = os.path.join(base, filename)
 		if os.path.isfile(path):
 			return path
 	return None
+
+
+def _migrate_roms():
+	"""Copy bundled ROMs into the persistent folder, once.
+
+	This is what makes updates safe: the first run of a release bundle
+	seeds votrax-data, and from then on the ROMs survive no matter what
+	happens to the add-on folder.  Never overwrites -- a user-supplied
+	ROM in the data folder always wins."""
+	import shutil
+	try:
+		os.makedirs(_data_dir(), exist_ok=True)
+		for _display, _variant, rom in _VOICES.values():
+			bundled = os.path.join(_DIR, rom)
+			target = os.path.join(_data_dir(), rom)
+			if os.path.isfile(bundled) and not os.path.isfile(target):
+				shutil.copy2(bundled, target)
+	except OSError:
+		pass   # a read-only config is not a reason to fail the synth
 
 
 #: voice id -> (display name, variant number, rom file)
@@ -172,6 +205,7 @@ class SynthDriver(BaseSynthDriver):
 		self._pitch = 50
 		self._epoch = 0
 		self._queue = queue.Queue()
+		_migrate_roms()
 		self._voice = next(v for v in _VOICES if _find_rom(_VOICES[v][2]))
 		# First open happens here on the main thread, before the speak
 		# thread exists; afterwards the chip belongs to that thread only.
