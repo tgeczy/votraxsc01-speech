@@ -51,7 +51,9 @@ function Assert-StaticCRT([string]$Binary) {
     }
 }
 
-$core = @("$PSScriptRoot\src\core\sc01.cpp", "$PSScriptRoot\third_party\mame\votrax.cpp")
+$core = @("$PSScriptRoot\src\core\sc01.cpp",
+          "$PSScriptRoot\src\frontend\text_to_votrax.c",
+          "$PSScriptRoot\third_party\mame\votrax.cpp")
 # /wd4244 and /wd4805 mirror MAME's own build settings for its sources
 # (bitswap narrowing into u8 registers is idiomatic there, not a bug).
 $cxx = @("/nologo", "/std:c++20", "/EHsc", "/O2", "/MT", "/W3", "/DUNICODE", "/D_UNICODE",
@@ -73,4 +75,36 @@ if ($Target -in "dll", "all") {
         Assert-StaticCRT "$OutDir\$arch\sc01.dll"
         Write-Host "built $OutDir\$arch\sc01.dll"
     }
+}
+
+if ($Target -in "sapi", "all") {
+    # The SAPI engine links the chip statically: one DLL per architecture,
+    # no dependency chain.  Both architectures matter -- 32-bit hosts
+    # (JAWS, older SAPI apps) load the x86 voice, 64-bit hosts the x64.
+    foreach ($arch in "x64", "x86") {
+        Invoke-CL $arch ($cxx + @("/LD") + $inc +
+            @("$PSScriptRoot\sapi\votrax_sapi.cpp") + $core +
+            @("/Fe$OutDir\$arch\votrax_sapi.dll", "/Fo$OutDir\obj\", "/link",
+              "/DEF:$PSScriptRoot\sapi\votrax_sapi.def",
+              "sapi.lib", "ole32.lib", "advapi32.lib", "user32.lib"))
+        Assert-StaticCRT "$OutDir\$arch\votrax_sapi.dll"
+        Write-Host "built $OutDir\$arch\votrax_sapi.dll"
+    }
+}
+
+if ($Target -in "addon", "all") {
+    # Stage the NVDA add-on: driver sources + both core DLLs, zipped with
+    # the .nvda-addon extension.  ROMs are the user's to add.
+    $stage = "$OutDir\addon-stage"
+    if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+    Copy-Item -Recurse "$PSScriptRoot\nvda-addon" $stage
+    Copy-Item "$OutDir\x64\sc01.dll" "$stage\synthDrivers\votraxsc01\sc01-x64.dll"
+    Copy-Item "$OutDir\x86\sc01.dll" "$stage\synthDrivers\votraxsc01\sc01-x86.dll"
+    $manifest = Get-Content "$stage\manifest.ini" | Where-Object { $_ -match '^version = (.+)$' }
+    $version = $Matches[1]
+    $bundle = "$OutDir\votraxsc01-$version.nvda-addon"
+    if (Test-Path $bundle) { Remove-Item $bundle }
+    Compress-Archive -Path "$stage\*" -DestinationPath "$bundle.zip"
+    Move-Item "$bundle.zip" $bundle
+    Write-Host "built $bundle"
 }
