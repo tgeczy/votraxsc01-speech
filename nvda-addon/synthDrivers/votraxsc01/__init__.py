@@ -18,10 +18,15 @@ Cancellation is an epoch counter: cancel() bumps it, and speech items
 carrying an older epoch are dropped.  Control items (rate, pitch, voice)
 carry no epoch -- a settings change must survive a cancel.
 
-Rate is the chip's master clock, exactly as on real Votrax hardware --
-speeding up raises pitch too, and that is authentic, not a bug.  The
-2-bit inflection input is exposed as NVDA's pitch setting, quantized to
-its four real levels.
+Rate, by default, is constant-pitch by PHONE TRUNCATION: the chip runs at
+its datasheet clock, and each phone is held for a shorter (or longer) time
+than its natural length by writing the next phone early.  Tempo changes,
+pitch does not -- and the audio is the chip's own analog output, with no
+time-stretching and none of its graininess.  This is how the SSI-263's
+duration control and fast Votrax speech worked.  The optional "authentic
+rate" makes rate the master clock instead, the 1980 hardware's one knob,
+where faster is also higher-pitched.  The 2-bit inflection input is
+exposed as NVDA's pitch setting, quantized to its four real levels.
 """
 
 import ctypes
@@ -75,6 +80,7 @@ class _Chip:
 			ctypes.c_uint, ctypes.c_char_p, ctypes.c_size_t]
 		for name, res, args in (
 			("vx_destroy", None, [p]),
+			("vx_reset", None, [p]),
 			("vx_set_clock", None, [p, ctypes.c_uint]),
 			("vx_sample_rate", ctypes.c_double, [p]),
 			("vx_write", None, [p, ctypes.c_ubyte]),
@@ -83,12 +89,6 @@ class _Chip:
 			("vx_render", ctypes.c_int, [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]),
 			("ttv_translate", ctypes.c_int, [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]),
 			("ttv_spell", ctypes.c_int, [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]),
-			("vxs_create", p, []),
-			("vxs_destroy", None, [p]),
-			("vxs_reset", None, [p]),
-			("vxs_set_speed", None, [p, ctypes.c_double]),
-			("vxs_feed", None, [p, ctypes.c_char_p, ctypes.c_int]),
-			("vxs_pull", ctypes.c_int, [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]),
 		):
 			fn = getattr(lib, name)
 			fn.restype, fn.argtypes = res, args
@@ -103,6 +103,12 @@ class _Chip:
 		if self._chip:
 			self._lib.vx_destroy(self._chip)
 			self._chip = None
+
+	def reset(self):
+		# Instant silence: clears the chip's interpolation state and forces
+		# the pause phone.  Preserves the clock; zeroes inflection (caller
+		# re-applies pitch).
+		self._lib.vx_reset(self._chip)
 
 	def set_clock(self, hz):
 		self._lib.vx_set_clock(self._chip, int(hz))
@@ -123,28 +129,6 @@ class _Chip:
 	def render(self, count):
 		buf = (ctypes.c_int16 * count)()
 		n = self._lib.vx_render(self._chip, buf, count)
-		return ctypes.string_at(buf, n * 2)
-
-	# -- the time stretcher lives in the same DLL; thin pass-throughs --
-
-	def stretch_create(self):
-		return self._lib.vxs_create()
-
-	def stretch_destroy(self, s):
-		self._lib.vxs_destroy(s)
-
-	def stretch_reset(self, s):
-		self._lib.vxs_reset(s)
-
-	def stretch_speed(self, s, speed):
-		self._lib.vxs_set_speed(s, speed)
-
-	def stretch_feed(self, s, data):
-		self._lib.vxs_feed(s, data, len(data) // 2)
-
-	def stretch_pull(self, s, count):
-		buf = (ctypes.c_int16 * count)()
-		n = self._lib.vxs_pull(s, buf, count)
 		return ctypes.string_at(buf, n * 2)
 
 	def translate(self, text, spell=False):
@@ -214,7 +198,15 @@ class SynthDriver(BaseSynthDriver):
 	supportedSettings = (
 		BaseSynthDriver.VoiceSetting(),
 		BaseSynthDriver.RateSetting(),
-		BaseSynthDriver.PitchSetting(minStep=25),   # four real hardware levels
+		# The SC-01's pitch input is two bits -- four levels, nothing
+		# between.  minStep=33 makes the settings ring step one level per
+		# press, and _set_pitch snaps the stored value onto {0,33,66,100}
+		# so the announced number always equals the level you hear.
+		# Without the snap, NVDA's ring left the number free of the four
+		# audible steps and it appeared to "jump" (0, 33, 66, 100 via the
+		# normal step; 0/100 via the large step) with no matching change
+		# in pitch.
+		BaseSynthDriver.PitchSetting(minStep=33),
 		# Rate is constant-pitch time scaling by default.  This box brings
 		# back the hardware truth: rate as master clock, where faster is
 		# also higher -- the chipmunk the 1980 knob actually made.
@@ -241,11 +233,16 @@ class SynthDriver(BaseSynthDriver):
 		self._player = None
 		self._player_rate = 0
 		self._rate = 50
-		self._pitch = 50
+		self._pitch = 33   # canonical level 1, matching NVDA's default of 50
 		self._authentic = False
-		self._stretch = None
-		self._stretch_epoch = -1
+		self._speed = 1.0            # truncation tempo factor (>1 faster)
+		self._phone_natural = {}     # phone -> natural length in samples
+		self._default_hold = 3840    # fallback hold if a phone measures 0
 		self._epoch = 0
+		# Epoch of the last thing handed to the chip.  When a new utterance
+		# carries a different epoch, the chip is still voicing the previous
+		# (cancelled) utterance's latched phone and must be silenced first.
+		self._chip_epoch = 0
 		self._queue = queue.Queue()
 		_migrate_roms()
 		self._voice = next(v for v in _VOICES if _find_rom(_VOICES[v][2]))
@@ -263,9 +260,6 @@ class SynthDriver(BaseSynthDriver):
 		if self._player:
 			self._player.close()
 			self._player = None
-		if self._stretch and self._chip:
-			self._chip.stretch_destroy(self._stretch)
-			self._stretch = None
 		if self._chip:
 			self._chip.close()
 			self._chip = None
@@ -281,8 +275,7 @@ class SynthDriver(BaseSynthDriver):
 			rom = f.read()
 		old = self._chip
 		self._chip = _Chip(variant, rom)
-		if self._stretch is None:
-			self._stretch = self._chip.stretch_create()
+		self._measure_phone_durations()
 		self._apply_rate()
 		self._apply_pitch()
 		self._ensure_player()
@@ -300,20 +293,45 @@ class SynthDriver(BaseSynthDriver):
 			if old:
 				old.close()
 
+	def _measure_phone_durations(self):
+		"""Each phone's natural length in samples at the base clock.
+
+		Measured once per voice (the two masks differ), by writing each
+		phone out of silence and rendering until the chip asks for the
+		next.  Truncation scales these to set tempo, so this is what makes
+		constant-pitch speed changes possible without a time-stretcher."""
+		self._chip.set_clock(_BASE_CLOCK)
+		block = max(1, int(self._chip.sample_rate * 0.012))
+		nat = {}
+		for ph in range(64):
+			self._chip.reset()
+			self._chip.render(64)                 # settle the reset
+			self._chip.write(ph)
+			total = 0
+			while not self._chip.ready() and total < 400000:
+				total += len(self._chip.render(block)) // 2
+			nat[ph] = total
+		self._phone_natural = nat
+		voiced = sorted(v for v in nat.values() if v > 0)
+		if voiced:
+			self._default_hold = voiced[len(voiced) // 2]
+		self._chip.reset()
+
 	def _apply_rate(self):
 		# 0..100 -> half to double speed, exponentially, so equal slider
 		# steps sound like equal speed ratios.  Two regimes:
-		#   default   -- the chip runs at its datasheet clock and the
-		#                stretcher changes speed at constant pitch;
+		#   default   -- constant pitch by phone truncation: the chip stays
+		#                at its datasheet clock and each phone is held for
+		#                natural/speed samples (see _feed_truncated);
 		#   authentic -- rate IS the master clock, pitch and all, as the
 		#                1980 hardware's one knob really behaved.
 		factor = 2.0 ** ((self._rate - 50) / 50.0)
 		if self._authentic:
 			self._chip.set_clock(_BASE_CLOCK * factor)
-			self._chip.stretch_speed(self._stretch, 1.0)
+			self._speed = 1.0
 		else:
 			self._chip.set_clock(_BASE_CLOCK)
-			self._chip.stretch_speed(self._stretch, factor)
+			self._speed = factor
 
 	def _apply_pitch(self):
 		# Quantize NVDA's 0..100 onto the chip's four inflection levels.
@@ -349,7 +367,12 @@ class SynthDriver(BaseSynthDriver):
 		return self._pitch
 
 	def _set_pitch(self, value):
-		self._pitch = max(0, min(100, value))
+		# Snap onto the four real inflection levels' canonical values so
+		# the number NVDA announces matches the pitch produced, and each
+		# ring step lands cleanly on the next level.  v*4//101 maps
+		# 0->0, 33->1, 66->2, 100->3; level*100//3 is its inverse.
+		level = min(3, max(0, value) * 4 // 101)
+		self._pitch = level * 100 // 3
 		self._queue.put((None, "pitch", None, None))
 
 	def _get_authenticRate(self):
@@ -426,43 +449,89 @@ class SynthDriver(BaseSynthDriver):
 					self._player.idle()
 					synthDoneSpeaking.notify(synth=self)
 
-	def _push_audio(self, data, epoch):
-		"""Chip output to the player, through the stretcher by default.
+	def _feed_player(self, data, epoch):
+		"""Chip audio straight to the player, re-checking the epoch at the
+		moment of feeding.
 
-		A new epoch drops whatever the stretcher was holding: after a
-		cancel, half-processed old speech must not leak into the next
-		utterance."""
-		if self._stretch_epoch != epoch:
-			self._chip.stretch_reset(self._stretch)
-			self._stretch_epoch = epoch
-		if self._authentic:
+		A cancel can bump the epoch between the caller's check and here,
+		and audio fed to a just-stopped player starts sounding before any
+		later stop() can discard it -- heard as the previous utterance's
+		tail at the head of the next.  So drop the block if the epoch has
+		moved."""
+		if epoch == self._epoch and data:
 			self._player.feed(data)
-			return
-		self._chip.stretch_feed(self._stretch, data)
-		while True:
-			out = self._chip.stretch_pull(self._stretch, 4096)
-			if not out:
-				break
-			self._player.feed(out)
+
+	def _sync_chip_epoch(self, epoch):
+		"""Silence a chip left voicing a cancelled utterance.
+
+		The SC-01 latches a phone and voices it to completion (50-250 ms),
+		asking for the next only ~0.1 ms after each write.  So a cancel
+		does not stop the sound: the chip keeps producing the last phone.
+		If the next utterance simply renders from there, that phone's
+		remainder comes out first -- tagged with the NEW epoch, so it
+		passes every cancellation guard -- and is heard as a scrap of the
+		previous utterance at the start of this one (bscross32's "spit
+		back", Tomi's "something from later on at the start").  Resetting
+		clears the interpolation state instantly; it zeroes inflection, so
+		pitch is re-applied.  The clock is preserved."""
+		if epoch != self._chip_epoch:
+			self._chip.reset()
+			self._apply_pitch()
+			self._chip_epoch = epoch
 
 	def _feed(self, phones, epoch):
-		"""Feed phonemes as the chip asks for them, streaming the audio.
+		"""Voice a run of phones, streaming the audio to the player.
 
 		Blocks of ~12 ms keep cancel latency low; the epoch check between
-		blocks is what makes a cancel take effect mid-word.
+		blocks is what makes a cancel take effect mid-word.  A chip left
+		voicing a cancelled phone is silenced first (see _sync_chip_epoch).
 		"""
+		self._sync_chip_epoch(epoch)
+		if self._authentic:
+			self._feed_authentic(phones, epoch)
+		else:
+			self._feed_truncated(phones, epoch)
+		if epoch != self._epoch and self._player:
+			# A cancel landed mid-utterance.  cancel() already stopped the
+			# player from the main thread; stop once more here to sweep up
+			# any block that slipped through the feed race window.
+			self._player.stop()
+
+	def _feed_authentic(self, phones, epoch):
+		# Rate is the master clock, so each phone plays its natural length:
+		# write the next only when the chip asks (A/R re-asserts).
 		block = max(1, int(self._chip.sample_rate * 0.012))
 		pending = list(phones)
 		while pending and epoch == self._epoch:
 			if self._chip.ready():
 				self._chip.write(pending.pop(0))
-			self._push_audio(self._chip.render(block), epoch)
+			self._feed_player(self._chip.render(block), epoch)
+
+	def _feed_truncated(self, phones, epoch):
+		# Constant pitch by truncation: hold each phone for natural/speed
+		# samples, writing the next early to shorten it.  Faster tempo,
+		# pitch untouched, and the audio is the chip's own analog output --
+		# no time-stretch, so none of its graininess.
+		block = max(1, int(self._chip.sample_rate * 0.012))
+		for phone in phones:
+			if epoch != self._epoch:
+				return
+			self._chip.write(phone)
+			nat = self._phone_natural.get(phone & _STOP, self._default_hold)
+			target = max(1, int(nat / self._speed))
+			got = 0
+			while got < target and epoch == self._epoch:
+				n = min(block, target - got)
+				self._feed_player(self._chip.render(n), epoch)
+				got += n
 
 	def _render_tail(self, epoch, seconds):
-		# The rendered silence also flushes the stretcher's ~26 ms of
-		# lookahead, so the utterance's true ending is always heard.
+		# Ring out the last phone after STOP so the utterance's true ending
+		# is heard.
 		block = max(1, int(self._chip.sample_rate * 0.012))
 		for _ in range(int(seconds / 0.012) + 1):
 			if epoch != self._epoch:
+				if self._player:
+					self._player.stop()   # same cancel sweep as _feed
 				return
-			self._push_audio(self._chip.render(block), epoch)
+			self._feed_player(self._chip.render(block), epoch)

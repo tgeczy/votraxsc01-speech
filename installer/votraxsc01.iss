@@ -18,7 +18,7 @@
 #ifndef StageDir
 #define StageDir "..\build"
 #endif
-#define AppVer "1.0.1"
+#define AppVer "1.0.2"
 
 [Setup]
 AppId={{E5A0B7C2-5C01-4F6D-8B2A-90D1C4E7F3A8}
@@ -68,6 +68,19 @@ Source: "{src}\sc01.bin"; DestDir: "{app}\x86"; Flags: external skipifsourcedoes
 Source: "{src}\sc01.bin"; DestDir: "{app}\x64"; Flags: external skipifsourcedoesntexist; Check: Is64BitInstallMode
 Source: "{src}\sc01a.bin"; DestDir: "{app}\x86"; Flags: external skipifsourcedoesntexist
 Source: "{src}\sc01a.bin"; DestDir: "{app}\x64"; Flags: external skipifsourcedoesntexist; Check: Is64BitInstallMode
+
+[Tasks]
+; The one voice option that is not a per-voice setting: the rate model.
+Name: "authenticrate"; Description: "Authentic rate: speech gets higher-pitched as it speeds up, like the real 1980 chip (default keeps the pitch constant). Restart your screen reader after install to apply."; GroupDescription: "Voice options:"; Flags: unchecked
+
+[Registry]
+; The engine reads Software\votraxsc01\AuthenticRate at load, so a change
+; takes effect the next time the host program (screen reader) starts.  The
+; engine checks HKCU first, then HKLM, so a user can override this
+; machine-wide default per-user without admin rights.
+Root: HKLM; Subkey: "Software\votraxsc01"; Flags: uninsdeletekeyifempty
+Root: HKLM; Subkey: "Software\votraxsc01"; ValueType: dword; ValueName: "AuthenticRate"; ValueData: "1"; Tasks: authenticrate; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\votraxsc01"; ValueType: dword; ValueName: "AuthenticRate"; ValueData: "0"; Tasks: not authenticrate; Flags: uninsdeletevalue
 
 [Icons]
 Name: "{autoprograms}\Re-register Votrax voices"; Filename: "{app}\register.cmd"; WorkingDir: "{app}"

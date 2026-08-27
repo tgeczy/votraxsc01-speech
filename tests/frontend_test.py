@@ -60,6 +60,14 @@ CASES = [
 	 "R UH B B ER PA0 B A AY B E PA0 B UH G E PA0 B UH M P ER Z PA0"),
 	("NVDA", True,
 	 "EH N PA0 V E PA0 D E PA0 A AY PA0"),
+	# Letter names the vendored Ascii table spelled wrong -- 'o' as "ah",
+	# 'u' as "uh-w", 's' as a VOICED "ezz" (buzzy) -- corrected in
+	# say_letter to "oh"/"you"/"ess" (the unvoiced S, phone 31), on both the
+	# spelled and word paths (NVDA spells with ttv_spell).
+	("o", True, "O1 U1 PA0"),
+	("u", True, "Y1 IU U PA0"),
+	("s", True, "EH S PA0"),
+	("o", False, "O1 U1 PA0"),
 	# The exception dictionary (exceptions.c): each entry was measured
 	# broken through the 1976 rules, and its respelling measured correct.
 	("search", False,

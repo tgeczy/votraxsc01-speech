@@ -52,6 +52,26 @@ extern int say_ordinal(long value);
 extern int say_ascii(int character);
 extern int spell_word(char *word);
 
+/* Three letter names the vendored Ascii table (spellword.c) gets wrong:
+ * 'o' as "AA" (ah), 'u' as "AHw" (uh-w), and 's' as "EHz" -- a VOICED z,
+ * so the letter comes out "ezz" and buzzy.  The names are "oh", "you" and
+ * "ess" (the datasheet's unvoiced S, phone 31, not the voiced Z, phone
+ * 18).  spellword.c is byte-identical vendored, so correct just these
+ * here, in our own code, and defer to say_ascii otherwise.  (The
+ * weak/absent burst on stop letters like 'd', and any buzz on /s/ inside
+ * words -- which already uses the correct S phone -- are the chip itself,
+ * MAME's SC-01 model, not a mapping bug, so there is nothing to override
+ * there.) */
+static void say_letter(int character)
+{
+	switch (makeupper(character)) {
+	case 'O': outstring("OW "); break;    /* oh, not ah */
+	case 'U': outstring("yUW "); break;   /* you, not uh-w */
+	case 'S': outstring("EHs "); break;   /* ess (unvoiced), not "ezz" */
+	default:  say_ascii(character); break;
+	}
+}
+
 /* ---- input cursor: the original's 4-character look-ahead ------------ */
 
 #define ENDC (-1)
@@ -122,7 +142,7 @@ static void have_letter(void)
 	if (ISDIG(Char))
 		spell_word(buff);            /* AAANNN part numbers */
 	else if (strlen(buff) == 3)
-		say_ascii(buff[1]);          /* single letter */
+		say_letter(buff[1]);         /* single letter (o/u corrected) */
 	else if (Char == '.')
 		abbrev(buff);
 	else {
@@ -291,7 +311,7 @@ int wasser_spell(const char *text, char *out, int out_max)
 	g_max = out_max;
 	g_len = 0;
 	for (; text && *text; text++) {
-		say_ascii((unsigned char)*text & 0x7F);
+		say_letter((unsigned char)*text & 0x7F);   /* o/u corrected */
 		outchar(' ');
 	}
 	out[g_len] = '\0';

@@ -93,6 +93,65 @@ def main():
 			failures += 1
 			print(f"FAIL streaming speed {speed}: {got} samples, wanted ~{int(want)}")
 
+	# Isolation + onset: the streaming bugs bscross32 reported (a bit of the
+	# previous utterance leaking into the next, word onsets clipped) come
+	# down to state surviving between utterances and a fade-in on the first
+	# frame.  vxs_flush must leave the stretcher exactly as fresh, and the
+	# first output frame must be the input verbatim, not faded up.
+	lib.vxs_flush.argtypes = [ctypes.c_void_p]
+	OVERLAP = 256
+
+	def burst(freq, seconds, amp=15000):
+		n = int(RATE * seconds)
+		a = (ctypes.c_int16 * n)()
+		for i in range(n):
+			a[i] = int(amp * math.sin(2 * math.pi * freq * i / RATE))
+		return a, n
+
+	def drain(s):
+		o, pull = [], (ctypes.c_int16 * 8192)()
+		while True:
+			m = lib.vxs_pull(s, pull, 8192)
+			o.extend(pull[:m])
+			if not m:
+				break
+		return o
+
+	def utter(s, buf, n):
+		lib.vxs_feed(s, buf, n)
+		o = drain(s)
+		lib.vxs_flush(s)
+		return o + drain(s)
+
+	A, An = burst(180, 0.20)
+	B, Bn = burst(320, 0.20)
+
+	s = lib.vxs_create()
+	lib.vxs_set_speed(s, 1.5)
+	utter(s, A, An)                 # a whole first utterance, then flushed
+	reusedB = utter(s, B, Bn)       # the second, on the reused stretcher
+	lib.vxs_destroy(s)
+
+	s = lib.vxs_create()
+	lib.vxs_set_speed(s, 1.5)
+	freshB = utter(s, B, Bn)        # the same utterance, fresh stretcher
+	lib.vxs_destroy(s)
+
+	if reusedB != freshB:
+		failures += 1
+		print(f"FAIL isolation: B after a flushed utterance ({len(reusedB)} "
+		      f"samples) differs from B fresh ({len(freshB)}) -- state leaked")
+
+	s = lib.vxs_create()
+	lib.vxs_set_speed(s, 1.5)
+	lib.vxs_feed(s, B, Bn)
+	onset = drain(s)
+	lib.vxs_destroy(s)
+	if onset[:OVERLAP] != list(B[:OVERLAP]):
+		failures += 1
+		print("FAIL onset: first frame is not the input verbatim "
+		      "(faded up from silence)")
+
 	if failures:
 		print(f"stretch: {failures} failure(s)")
 		return 1

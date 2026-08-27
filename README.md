@@ -20,7 +20,7 @@ neither replaces the other.
 | C core | `src/core/sc01.h` | The flat API everything shares: create (CRC-verified ROM), write phoneme, poll ready, render samples |
 | Text-to-phoneme | `src/frontend/` | English text → SC-01 phoneme codes, one C implementation for all consumers |
 | Probe | `tools/say01.c` | Command line: phoneme strings or the whole 64-phone table → WAV; the reference harness |
-| NVDA add-on | `nvda-addon/` | Native 64-bit driver (with a 32-bit DLL for older NVDA); rate is the master clock, exactly like the hardware |
+| NVDA add-on | `nvda-addon/` | Native 64-bit driver (with a 32-bit DLL for older NVDA); constant-pitch rate by phone truncation, with an "authentic rate" option that is the master clock, exactly like the hardware |
 | SAPI 5 voice | `sapi/` | Single-file engine; JAWS word-bookmark batching, abort/skip polling and the other conventions of a tried and tested engine |
 | Installer | `installer/` | Inno Setup: both bitnesses registered, ROMs picked up from beside the setup file |
 
@@ -50,6 +50,30 @@ First sound without installing anything:
 .\build\say01.exe --rom roms\sc01a.bin --phones "H EH1 L OO1"
 .\build\say01.exe --rom roms\sc01a.bin --table   # all 64 phones, indexed
 ```
+
+## Known limitations
+
+This is a faithful reproduction of a 1980 phoneme chip, not a modern
+clear synthesizer, and some of what you hear is the chip (or the model of
+it), not the driver:
+
+- **Stops are weak.** MAME's SC-01 simulation renders the stop consonants
+  (b, d, g, k, p, t) as near-silent closures with little or no burst. So a
+  spelled letter can come out as just its vowel — "D" like "E", "K" like
+  "A" — and stops inside words are soft. This is at the silicon-model
+  level; the same weakness shows up in other SC-01 drivers and in period
+  Votrax hardware. It may improve if MAME's model does. Short of forking
+  MAME or driving a physical chip, there is nothing the driver can do
+  about a burst the chip never produces.
+- **Words are pronounced by 1976 rules.** The text-to-phoneme stage is the
+  NRL letter-to-sound rules of the Votrax era, so many words are wrong the
+  way they were wrong then ("select" → "sealect"). A measured exception
+  dictionary fixes the worst offenders; a full pronunciation dictionary
+  (CMUDict-style) would be the real remedy and is a possible future
+  addition. Letter names the rules got wrong (o, u) are corrected.
+- **The voice is not very intelligible**, especially at first. That is the
+  SC-01. The SSI-263 was the clearer chip; this is deliberately the older,
+  rougher one, preserved as it was.
 
 ## Design notes
 

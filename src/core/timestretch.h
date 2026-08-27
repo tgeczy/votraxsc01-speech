@@ -40,6 +40,11 @@ VXS_API void vxs_set_speed(vx_stretch *s, double speed);   /* clamped 0.4..3 */
 VXS_API void vxs_feed(vx_stretch *s, const int16_t *in, int count);
 VXS_API int  vxs_pull(vx_stretch *s, int16_t *out, int max);
 
+/* End of an utterance: emit the held sub-frame residual (so the ending
+ * is heard) and clear the running state (so no crossfade tail bleeds
+ * into the next utterance).  Pull afterwards to drain the residual. */
+VXS_API void vxs_flush(vx_stretch *s);
+
 /* One-shot: stretch a whole buffer, tail included.  Returns samples
  * written to out (at most max). */
 VXS_API int vxs_stretch_buffer(const int16_t *in, int count, double speed,

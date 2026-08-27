@@ -19,9 +19,11 @@
 // third_party/mame), linked statically -- there is no DLL chain to break.
 //
 // Output format is fixed at 40000 Hz (the chip's rate at its 720 kHz
-// datasheet clock).  SAPI rate changes vary the emulated master clock --
-// exactly how real Votrax hardware sped up, pitch shift and all -- and the
-// audio is linearly resampled back onto the fixed output rate.
+// datasheet clock).  SAPI rate, by default, changes tempo at constant
+// pitch by phone truncation (holding each phone for a shorter time); the
+// "authentic rate" voices instead vary the emulated master clock -- how
+// real Votrax hardware sped up, pitch shift and all.  Either way the audio
+// is linearly resampled back onto the fixed output rate.
 
 #define NOMINMAX
 #include <windows.h>
@@ -72,7 +74,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 	return TRUE;
 }
 
-// The two voices this DLL can register, keyed by token name.
+// The two voices this DLL registers, one per mask revision.  The rate
+// model (constant-pitch phone truncation by default, or "authentic"
+// master-clock) is NOT a separate voice -- it is a machine/user registry
+// flag the engine reads at load; see read_authentic_flag().
 struct variant_info {
 	const wchar_t *token;      // registry token key name
 	const wchar_t *display;    // what the user sees in voice lists
@@ -83,6 +88,23 @@ static const variant_info k_variants[2] = {
 	{ L"VotraxSC01",  L"Votrax SC-01 (emulated)",   L"sc01.bin",  VX_SC01 },
 	{ L"VotraxSC01A", L"Votrax SC-01-A (emulated)", L"sc01a.bin", VX_SC01A },
 };
+
+// "Authentic rate" is off by default (the clean constant-pitch voice).
+// When set, rate becomes the chip's master clock -- faster and higher, the
+// 1980 hardware's one knob.  Read once at voice load, so changing it takes
+// effect the next time the host program starts (the label in the installer
+// says as much).  HKCU wins over HKLM, so a user can override the
+// machine-wide installer setting without admin rights.
+static bool read_authentic_flag()
+{
+	for (HKEY root : { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE }) {
+		DWORD val = 0, sz = sizeof(val);
+		if (RegGetValueW(root, L"Software\\votraxsc01", L"AuthenticRate",
+				RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS)
+			return val != 0;
+	}
+	return false;
+}
 
 static bool read_file(const std::wstring &path, std::vector<unsigned char> &out)
 {
@@ -110,8 +132,14 @@ static std::string narrow(const std::wstring &w)
 // the synthesis half: chip + frontend + resampler
 //==========================================================================
 
-// Fixed output rate: the chip's exact rate at the datasheet clock.
-static const DWORD k_output_rate = VX_DEFAULT_CLOCK / 18;
+// Fixed output rate.  The chip renders at 40000 Hz (VX_DEFAULT_CLOCK/18);
+// we resample to 22050 on the way out -- the standard SAPI rate the golden
+// reference engines use, well within the Votrax's <5 kHz formant range, and
+// a touch lighter to move than 40000.  (Real hosts drive the voice through
+// ISpVoice, which is validated; note that .NET System.Speech's
+// SetOutputToWaveFile sink has a separate quirk that can stall on this
+// engine -- screen readers do not use that path.)
+static const DWORD k_output_rate = 22050;
 
 class Synth
 {
@@ -139,10 +167,31 @@ public:
 				return false;
 			}
 			m_variant = variant;
+			measure_naturals();
 			return true;
 		}
 		last_error = "unknown variant";
 		return false;
+	}
+
+	// Each phone's natural length in samples at the base clock, measured
+	// once per chip: write it out of silence and render until the chip
+	// asks for the next.  Truncation scales these to change tempo at
+	// constant pitch.
+	void measure_naturals()
+	{
+		vx_set_clock(m_chip, VX_DEFAULT_CLOCK);
+		short block[512];
+		for (int ph = 0; ph < 64; ph++) {
+			vx_reset(m_chip);
+			vx_render(m_chip, block, 64);           // settle the reset
+			vx_write(m_chip, (uint8_t)ph);
+			int total = 0;
+			while (!vx_ready(m_chip) && total < 400000)
+				total += vx_render(m_chip, block, 512);
+			m_natural[ph] = total;
+		}
+		vx_reset(m_chip);
 	}
 
 	void close()
@@ -157,19 +206,22 @@ public:
 
 	// Render one utterance: translate, feed, resample to k_output_rate.
 	// `rate_adj` is SAPI's -10..10; `inflection` 0..3; `volume` 0..100.
-	// `spell` selects letter-by-letter translation.
+	// `spell` selects letter-by-letter translation.  `authentic` selects
+	// the rate model: false = constant pitch by phone truncation (clean,
+	// the default); true = rate as the master clock (faster and higher,
+	// the 1980 hardware's one knob).
 	void utterance(const std::wstring &text, long rate_adj, int inflection,
-	               int volume, bool spell, std::vector<short> &out)
+	               int volume, bool spell, bool authentic, std::vector<short> &out)
 	{
 		out.clear();
 		if (!m_chip)
 			return;
 
-		// The chip renders at its datasheet clock; SAPI rate becomes
-		// constant-pitch time scaling afterwards.  (The 1980 way -- rate
-		// as clock, chipmunk included -- lives on in the NVDA add-on's
-		// "authentic rate" option and say01's --clock.)
-		vx_set_clock(m_chip, VX_DEFAULT_CLOCK);
+		double speed = std::pow(2.0, (double)rate_adj / 10.0);   // rate 10 = 2x
+		if (authentic)
+			vx_set_clock(m_chip, (uint32_t)(VX_DEFAULT_CLOCK * speed));
+		else
+			vx_set_clock(m_chip, VX_DEFAULT_CLOCK);
 		vx_inflection(m_chip, (uint8_t)inflection);
 
 		std::string utf8 = narrow(text);
@@ -180,29 +232,56 @@ public:
 			return;
 		phones.resize(n);
 
-		// Feed and render at the chip's (rate-scaled) native rate.  The
-		// guard is a hard ceiling -- one second per phone plus slack -- so
-		// no misunderstanding of the ready line can ever hang a host.
+		// The guard is a hard ceiling -- generous samples per phone -- so no
+		// misunderstanding of the ready line can ever hang a host.
 		std::vector<short> native;
 		short block[512];
-		size_t next = 0;
 		long long rendered = 0;
 		const long long ceiling =
 			(long long)vx_sample_rate(m_chip) * ((long long)phones.size() + 4);
-		while (next < phones.size() && rendered < ceiling) {
-			if (vx_ready(m_chip))
-				vx_write(m_chip, phones[next++]);
-			int got = vx_render(m_chip, block, 512);
-			native.insert(native.end(), block, block + got);
-			rendered += got;
-		}
-		// The last phoneme has only been *written*; let it finish sounding
-		// (ready re-asserts at end of phone) before STOP cuts in, or every
-		// utterance loses its final phone.
-		while (!vx_ready(m_chip) && rendered < ceiling) {
-			int got = vx_render(m_chip, block, 512);
-			native.insert(native.end(), block, block + got);
-			rendered += got;
+
+		if (authentic) {
+			// Master clock does the timing: write when the chip asks, and
+			// each phone plays its natural length (at the scaled clock).
+			size_t next = 0;
+			while (next < phones.size() && rendered < ceiling) {
+				if (vx_ready(m_chip))
+					vx_write(m_chip, phones[next++]);
+				int got = vx_render(m_chip, block, 512);
+				native.insert(native.end(), block, block + got);
+				rendered += got;
+			}
+			// The last phone was only written; let it finish sounding
+			// (ready re-asserts at phone end) before STOP, or the utterance
+			// loses its final phone.
+			while (!vx_ready(m_chip) && rendered < ceiling) {
+				int got = vx_render(m_chip, block, 512);
+				native.insert(native.end(), block, block + got);
+				rendered += got;
+			}
+		} else {
+			// Constant pitch: hold each phone for natural/speed samples,
+			// writing the next early to shorten it.  The chip's own analog
+			// output, no time-stretch, so no graininess.
+			for (uint8_t ph : phones) {
+				if (rendered >= ceiling)
+					break;
+				vx_write(m_chip, ph);
+				int nat = m_natural[ph & 0x3f];
+				if (nat <= 0)
+					nat = k_default_hold;
+				int target = (int)(nat / speed);
+				if (target < 1)
+					target = 1;
+				int got = 0;
+				while (got < target && rendered < ceiling) {
+					int want = target - got < 512 ? target - got : 512;
+					int g = vx_render(m_chip, block, want);
+					native.insert(native.end(), block, block + g);
+					got += g;
+					rendered += g;
+				}
+			}
 		}
 		vx_write(m_chip, VX_PHONE_STOP);
 		for (int tail = 0; tail < (int)(vx_sample_rate(m_chip) / 4); tail += 512) {
@@ -210,20 +289,8 @@ public:
 			native.insert(native.end(), block, block + got);
 		}
 
-		// Rate 10 = double speed, pitch unchanged.
-		if (rate_adj != 0 && !native.empty()) {
-			double speed = std::pow(2.0, (double)rate_adj / 10.0);
-			std::vector<short> scaled(native.size() * 3 + FRAME_SLACK);
-			int n = vxs_stretch_buffer(native.data(), (int)native.size(),
-				speed, scaled.data(), (int)scaled.size());
-			scaled.resize(n);
-			native.swap(scaled);
-		}
-
 		resample(native, vx_sample_rate(m_chip), volume, out);
 	}
-
-	static const int FRAME_SLACK = 2048;
 
 	std::string last_error;
 
@@ -251,6 +318,8 @@ private:
 
 	vx_chip *m_chip = nullptr;
 	int m_variant = -1;
+	int m_natural[64] = { 0 };          // phone -> natural length (samples)
+	static const int k_default_hold = 3840;   // ~96 ms fallback
 };
 
 //==========================================================================
@@ -262,6 +331,7 @@ class Engine : public ISpTTSEngine, public ISpObjectWithToken
 	LONG m_refs = 1;
 	ISpObjectToken *m_token = nullptr;
 	int m_variant = VX_SC01A;
+	bool m_authentic = false;
 	Synth m_synth;
 	std::mutex m_speak_mutex;
 
@@ -320,6 +390,8 @@ public:
 			}
 			attrs->Release();
 		}
+		// Rate model is a registry flag, not a per-voice attribute.
+		m_authentic = read_authentic_flag();
 		return S_OK;
 	}
 
@@ -462,7 +534,8 @@ public:
 				(b.has_state ? (int)b.state.PitchAdj.MiddleAdj : 0) / 6 + 1, 0, 3);
 
 			sentence_boundary(site, written, b.src_offset);
-			m_synth.utterance(b.text, rate_adj, inflection, volume, b.spell, audio);
+			m_synth.utterance(b.text, rate_adj, inflection, volume, b.spell,
+				m_authentic, audio);
 
 			// Bookmark byte thresholds, proportional to char position.
 			const ULONGLONG total_bytes = (ULONGLONG)audio.size() * 2;

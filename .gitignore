@@ -2,3 +2,5 @@ build/
 *.wav
 *.obj
 roms/*.bin
+__pycache__/
+*.pyc
