@@ -15,6 +15,7 @@
  *          --wav <file>           (default: say01.wav)
  */
 #include "sc01.h"
+#include "text_to_votrax.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,6 +95,7 @@ static unsigned char *read_file(const char *path, uint32_t *len_out)
 int main(int argc, char **argv)
 {
 	const char *rom_path = NULL, *wav_path = "say01.wav", *phones = NULL;
+	const char *text = NULL;
 	const char *variant_name = NULL;
 	unsigned clock_hz = VX_DEFAULT_CLOCK;
 	int inflection = 0, table = 0, names = 0;
@@ -102,6 +104,7 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[i], "--rom") && i + 1 < argc) rom_path = argv[++i];
 		else if (!strcmp(argv[i], "--wav") && i + 1 < argc) wav_path = argv[++i];
 		else if (!strcmp(argv[i], "--phones") && i + 1 < argc) phones = argv[++i];
+		else if (!strcmp(argv[i], "--text") && i + 1 < argc) text = argv[++i];
 		else if (!strcmp(argv[i], "--variant") && i + 1 < argc) variant_name = argv[++i];
 		else if (!strcmp(argv[i], "--clock") && i + 1 < argc) clock_hz = (unsigned)atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--inflection") && i + 1 < argc) inflection = atoi(argv[++i]);
@@ -179,8 +182,22 @@ int main(int argc, char **argv)
 		free(spec);
 		vx_write(chip, VX_PHONE_STOP);
 		render_samples(chip, &out, (int)(rate / 4));
+	} else if (text) {
+		/* The full pipeline: NRL letter-to-sound, IPA-to-Votrax, chip. */
+		uint8_t codes[4096];
+		int n = ttv_translate(text, codes, 4096);
+		printf("%d phonemes:", n);
+		for (int i = 0; i < n; i++)
+			printf(" %s", vx_phone_name(codes[i]));
+		printf("\n");
+		for (int i = 0; i < n; i++) {
+			vx_write(chip, codes[i]);
+			render_until_ready(chip, &out, cap);
+		}
+		vx_write(chip, VX_PHONE_STOP);
+		render_samples(chip, &out, (int)(rate / 4));
 	} else {
-		fprintf(stderr, "say01: nothing to do; use --phones, --table or --names\n");
+		fprintf(stderr, "say01: nothing to do; use --text, --phones, --table or --names\n");
 		return 2;
 	}
 
