@@ -18,7 +18,7 @@
 #ifndef StageDir
 #define StageDir "..\build"
 #endif
-#define AppVer "0.1.0"
+#define AppVer "1.0.0"
 
 [Setup]
 AppId={{E5A0B7C2-5C01-4F6D-8B2A-90D1C4E7F3A8}
@@ -42,7 +42,14 @@ Source: "{#StageDir}\x64\votrax_sapi.dll"; DestDir: "{app}\x64"; Check: Is64BitI
 Source: "{#StageDir}\say01.exe"; DestDir: "{app}"
 Source: "{#StageDir}\votraxsc01-{#AppVer}.nvda-addon"; DestDir: "{app}"
 Source: "..\roms\README.md"; DestDir: "{app}"; DestName: "ROMS-README.md"
-; ROMs found beside the installer ride along into both engine folders.
+; ROMs staged by the build (release policy: bundles carry them, the git
+; repository never does -- see roms/README.md for the orphan-work status).
+Source: "{#StageDir}\x86\sc01.bin"; DestDir: "{app}\x86"; Flags: skipifsourcedoesntexist
+Source: "{#StageDir}\x86\sc01a.bin"; DestDir: "{app}\x86"; Flags: skipifsourcedoesntexist
+Source: "{#StageDir}\x64\sc01.bin"; DestDir: "{app}\x64"; Flags: skipifsourcedoesntexist; Check: Is64BitInstallMode
+Source: "{#StageDir}\x64\sc01a.bin"; DestDir: "{app}\x64"; Flags: skipifsourcedoesntexist; Check: Is64BitInstallMode
+; ...and any found beside the installer still ride along, for users adding
+; their own dumps to a ROM-less build.
 Source: "{src}\sc01.bin"; DestDir: "{app}\x86"; Flags: external skipifsourcedoesntexist
 Source: "{src}\sc01.bin"; DestDir: "{app}\x64"; Flags: external skipifsourcedoesntexist; Check: Is64BitInstallMode
 Source: "{src}\sc01a.bin"; DestDir: "{app}\x86"; Flags: external skipifsourcedoesntexist
