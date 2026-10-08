@@ -1,5 +1,5 @@
 # license:BSD-3-Clause
-# build.ps1 -- builds votraxsc01-nvda with bare MSVC Build Tools, no solution
+# build.ps1 -- builds votraxsc01-speech with bare MSVC Build Tools, no solution
 # files.  Modeled on panthera-speech's build script.
 #
 #   .\build.ps1                # probe tool + x64 core DLL

@@ -1,4 +1,4 @@
-# votraxsc01-nvda
+# votraxsc01-speech
 
 The **Votrax SC-01** — the 1980 phoneme chip behind the Type 'N Talk, the
 Apple II Mockingboard's speech, the HERO-1 robot and a generation of
