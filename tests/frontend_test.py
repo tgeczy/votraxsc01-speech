@@ -18,6 +18,8 @@ specific decision or repaired defect:
   21st         ordinals; 1993 the era's "nineteen hundred ninety three"
   church       CH -> T CH per the NRL translation rules
   spell NVDA   spelling via spellword.c's full ASCII name table
+  seventy...   the pronouncing dictionary (lexicon.c, CMUdict) first;
+               with it off, the 1976 rules and the exception dictionary
 """
 
 import ctypes
@@ -33,6 +35,7 @@ lib.vx_phone_name.argtypes = [ctypes.c_ubyte]
 for fn in (lib.ttv_translate, lib.ttv_spell):
 	fn.restype = ctypes.c_int
 	fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
+lib.ttv_set_lexicon.argtypes = [ctypes.c_int]
 
 
 def phones(text, spell=False):
@@ -44,7 +47,7 @@ def phones(text, spell=False):
 
 CASES = [
 	("hello world", False,
-	 "H EH L UH3 O1 U1 PA0 W UH3 ER L D PA0"),
+	 "H UH2 L UH3 O1 U1 PA0 W UH3 ER L D PA0"),
 	("girl", False,
 	 "G UH3 ER L PA0"),
 	("lay", False,
@@ -55,9 +58,9 @@ CASES = [
 	 "THV UH2 PA0 T W EH N T E PA0 F ER S T PA0 UH2 V PA0 M A AY PA1 PA0 "
 	 "N AH E1 N T E N PA0 H UH N D R EH D PA0 N AH E1 N T E PA0 TH R E PA1 PA1"),
 	("she washes the church watch", False,
-	 "SH E PA0 W AH SH I Z PA0 THV UH2 PA0 T CH ER T CH PA0 W AH T T CH PA0"),
+	 "SH E PA0 W AH SH I2 Z PA0 THV UH2 PA0 T CH ER T CH PA0 W AH T CH PA0"),
 	("rubber baby buggy bumpers", False,
-	 "R UH B B ER PA0 B A AY B E PA0 B UH G E PA0 B UH M P ER Z PA0"),
+	 "R UH B ER PA0 B A AY B Y PA0 B UH G Y PA0 B UH M P ER Z PA0"),
 	("NVDA", True,
 	 "EH N PA0 V E PA0 D E PA0 A AY PA0"),
 	# Letter names the vendored Ascii table spelled wrong -- 'o' as "ah",
@@ -68,30 +71,42 @@ CASES = [
 	("u", True, "Y1 IU U PA0"),
 	("s", True, "EH S PA0"),
 	("o", False, "O1 U1 PA0"),
+	# The pronouncing dictionary (lexicon.c, CMUdict): stressed vowels the
+	# 1976 rules got wrong, and its own reduced vowels.
+	("seventy", False,               # rules: "SEE-ventee"
+	 "S EH V UH2 N T Y PA0"),
+	("dialog", False,                # rules: "dee-uh-log"
+	 "D AH E1 UH2 L UH3 AW G PA0"),
+	("city", False,                  # rules: "SIGH-tee"
+	 "S I T Y PA0"),
+	("window", False,                # rules: "WINE-doe"; OW0 keeps its quality
+	 "W I N D O1 U1 PA0"),
+	("endless", False,               # rules invented a vowel (end-uh-less)
+	 "EH N D L UH2 S PA0"),
+	("of", False,                    # weak form: CMUdict's AH1 kept short
+	 "UH2 V PA0"),
+]
+
+# Dictionary off: the 1976 rules with the exception dictionary -- what
+# words outside CMUdict get.
+RULES = [
 	# The exception dictionary (exceptions.c): each entry was measured
 	# broken through the 1976 rules, and its respelling measured correct.
-	("search", False,
-	 "S ER T CH PA0"),
-	("searching", False,
-	 "S ER T CH I NG PA0"),
-	("research", False,
-	 "R E Z ER T CH PA0"),
-	("heard", False,
-	 "H ER D PA0"),
-	("bear", False,
-	 "B EH R PA0"),
-	("wear", False,
-	 "W EH R PA0"),
-	("cancel", False,
-	 "K AE N S UH2 L PA0"),
-	("canceled", False,
-	 "K AE N S UH2 L D PA0"),
-	("cancelling", False,
-	 "K AE N S UH2 L I NG PA0"),
+	("search", "S ER T CH PA0"),
+	("searching", "S ER T CH I NG PA0"),
+	("research", "R E Z ER T CH PA0"),
+	("heard", "H ER D PA0"),
+	("bear", "B EH R PA0"),
+	("wear", "W EH R PA0"),
+	("cancel", "K AE N S UH2 L PA0"),
+	("canceled", "K AE N S UH2 L D PA0"),
+	("cancelling", "K AE N S UH2 L I NG PA0"),
 	# ...and a neighbor the rules already got right, pinned so the
 	# dictionary can never overreach.
-	("earth", False,
-	 "ER TH PA0"),
+	("earth", "ER TH PA0"),
+	# The rules alone, as they were before the dictionary.
+	("seventy", "S E V EH N T E PA0"),
+	("select", "S E I3 L UH3 EH K T PA0"),
 ]
 
 
@@ -112,10 +127,18 @@ def main():
 			failures += 1
 			print(f"FAIL degenerate {text!r} -> {got!r} (expected silence)")
 	phones("'")   # spells "apostrophe"; only crash-freedom is asserted
+	lib.ttv_set_lexicon(0)
+	for text, want in RULES:
+		got = phones(text)
+		if got != want:
+			failures += 1
+			print(f"FAIL dictionary off {text!r}: want {want!r}, got {got!r}")
+	lib.ttv_set_lexicon(1)
 	if failures:
 		print(f"{failures} failure(s)")
 		return 1
-	print(f"frontend: {len(CASES)} golden cases and 4 degenerate inputs pass")
+	print(f"frontend: {len(CASES)} golden cases, {len(RULES)} with the dictionary "
+	      "off, and 4 degenerate inputs pass")
 	return 0
 
 

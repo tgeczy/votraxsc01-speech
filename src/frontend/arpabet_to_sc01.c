@@ -70,6 +70,13 @@ static const ipa_rule k_rules[] = {
 	{ "R",  "ER", "",   "UH3 R" },
 	{ "",   "ER", "",   "ER" },
 	{ "",   "AX", "",   "UH2" },
+	/* Reduced vowels from the pronouncing dictionary (lexicon.c), not NRL:
+	 * unstressed short i (I2, 84 ms: Votrax's own suffix spelling, "-ing"
+	 * I2 NG, "-ed" I2 D), unstressed u, and a word-final unstressed "-y"
+	 * -- Y is the SC-01's "any"/"city" ending, as Votrax spelled it. */
+	{ "",   "IX", "",   "I2" },
+	{ "",   "UX", "",   "U1" },
+	{ "",   "IF", "",   "Y" },
 	{ "",   "AH", "",   "UH" },
 	{ "",   "AY", "L",  "AH AY" },
 	{ "",   "AY", "R",  "AH I3" },

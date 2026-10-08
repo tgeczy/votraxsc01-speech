@@ -51,6 +51,11 @@ Source: "{#StageDir}\x64\votrax_sapi.dll"; DestDir: "{app}\x64"; Check: Is64BitI
 Source: "{#StageDir}\say01.exe"; DestDir: "{app}"
 Source: "{#StageDir}\votraxsc01-{#AppVer}.nvda-addon"; DestDir: "{app}"
 Source: "..\roms\README.md"; DestDir: "{app}"; DestName: "ROMS-README.md"
+; License notices travel with the binaries (BSD-3 for this project and
+; MAME's core, BSD-2 for the CMU Pronouncing Dictionary inside the DLLs).
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"
+Source: "..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"
+Source: "..\data\LICENSE-CMUdict.txt"; DestDir: "{app}"
 ; A static, versioned file -- NOT generated at install time.  Writing a
 ; fresh batch script from installer code and pointing a Start-menu entry
 ; at it is textbook dropper behavior to an antivirus heuristic, and was

@@ -61,3 +61,16 @@ int ttv_spell(const char *text, uint8_t *phones, int max_phones)
 {
 	return run(wasser_spell, text, phones, max_phones);
 }
+
+void ttv_set_lexicon(int on)
+{
+	extern void ttv_lexicon_enable(int on);
+	ttv_lexicon_enable(on);
+}
+
+int ttv_arpabet(const char *text, char *out, int out_max)
+{
+	if (!out || out_max <= 0)
+		return 0;
+	return wasser_translate(text ? text : "", out, out_max);
+}

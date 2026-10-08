@@ -19,7 +19,7 @@ neither replaces the other.
 |---|---|---|
 | The chip | `src/chip/` + `src/shim/` | MAME's device (upstream kept byte-identical in `third_party/mame/`), compiled outside MAME by a ~380-line `emu.h` stand-in, plus one marked closure-timing fix that restores P/T/K bursts (see [docs/closure-study.md](docs/closure-study.md)) |
 | C core | `src/core/sc01.h` | The flat API everything shares: create (CRC-verified ROM), write phoneme, poll ready, render samples |
-| Text-to-phoneme | `src/frontend/` | English text → SC-01 phoneme codes, one C implementation for all consumers |
+| Text-to-phoneme | `src/frontend/` | English text → SC-01 phoneme codes, one C implementation for all consumers: the CMU Pronouncing Dictionary first, the 1976 NRL rules for everything else |
 | Probe | `tools/say01.c` | Command line: phoneme strings or the whole 64-phone table → WAV; the reference harness |
 | NVDA add-on | `nvda-addon/` | Native 64-bit driver (with a 32-bit DLL for older NVDA); constant-pitch rate by phone truncation, with an "authentic rate" option that is the master clock, exactly like the hardware |
 | SAPI 5 voice | `sapi/` | Single-file engine; JAWS word-bookmark batching, abort/skip polling and the other conventions of a tried and tested engine |
@@ -66,12 +66,13 @@ it), not the driver:
   The bursts are back but short and, for K, quiet: Votrax gave K the least
   noise of the three. B, D and G carry no burst in the ROM at all, so "D"
   next to "E" is the chip itself.
-- **Words are pronounced by 1976 rules.** The text-to-phoneme stage is the
-  NRL letter-to-sound rules of the Votrax era, so many words are wrong the
-  way they were wrong then ("select" → "sealect"). A measured exception
-  dictionary fixes the worst offenders; a full pronunciation dictionary
-  (CMUDict-style) would be the real remedy and is a possible future
-  addition. Letter names the rules got wrong (o, u) are corrected.
+- **Words come from the CMU Pronouncing Dictionary first.** About 125,000
+  words are pronounced from CMUdict's own phonemes and stress, including
+  its reduced vowels, so "seventy", "city", "dialog" and "select" come out
+  right. Only words it lacks go through the NRL letter-to-sound rules of
+  the Votrax era (1976), which are still wrong the way they were wrong
+  then; a measured exception dictionary covers the worst of those. Names
+  and new coinages are where you will still hear the 1976 rules.
 - **The voice is not very intelligible**, especially at first. That is the
   SC-01. The SSI-263 was the clearer chip; this is deliberately the older,
   rougher one, preserved as it was.
@@ -90,5 +91,7 @@ it), not the driver:
 - The Speak-loop conventions follow the author's TGSpeechBox SAPI engine;
   the COM scaffold, panthera-speech; the add-on shape, Jayson Smith's
   EchoTalk.
+- Pronunciations: the CMU Pronouncing Dictionary (Carnegie Mellon
+  University, BSD-2-Clause).
 - Text-to-phoneme lineage: NRL Report 7948 (Elovitz, Johnson, McHugh &
   Shore, 1976), the letter-to-sound rules of the Votrax era.

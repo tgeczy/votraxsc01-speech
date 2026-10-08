@@ -38,6 +38,16 @@ TTV_API int ttv_translate(const char *text, uint8_t *phones, int max_phones);
  * spelling commands): letters become their letter names. */
 TTV_API int ttv_spell(const char *text, uint8_t *phones, int max_phones);
 
+/* The intermediate stage, for tools and tests: the rules' ARPAbet-style
+ * stream (Wasser's phoneme names, space-separated words) for `text`.
+ * Returns its length; `out` is always NUL-terminated. */
+TTV_API int ttv_arpabet(const char *text, char *out, int out_max);
+
+/* The pronouncing dictionary (lexicon.c, CMUdict): nonzero (the default)
+ * pronounces every word it knows from the dictionary; zero sends all words
+ * through the 1976 rules.  Process-wide, like the rest of the frontend. */
+TTV_API void ttv_set_lexicon(int on);
+
 #ifdef __cplusplus
 }
 #endif

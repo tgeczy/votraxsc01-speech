@@ -62,3 +62,19 @@ Translation of English Text to Phonetics by Means of Letter-to-Sound
 Rules* (Elovitz, Johnson, McHugh & Shore, NRL Report 7948, 1976,
 AD/A021 929) — a work of the United States Government, public domain
 under 17 USC 105.
+
+## The CMU Pronouncing Dictionary
+
+`data/cmudict.dict` is the **CMU Pronouncing Dictionary**, taken unmodified
+from https://github.com/cmusphinx/cmudict (commit 0f8072f, December 2024):
+about 125,000 plain English words with ARPAbet phonemes and stress marks.
+Copyright (C) 1993-2015 Carnegie Mellon University, BSD-2-Clause. Its
+license is `data/LICENSE-CMUdict.txt`, copied verbatim from that repository,
+and it ships alongside every binary that contains the dictionary.
+`build.ps1` packs the first pronunciation of each word into a C table at
+build time (`build/obj/lexicon_data.c`, never committed).
+`src/frontend/lexicon.c` then pronounces every word the dictionary knows
+in place of the 1976 rules.
+
+The idea of reusing the CMU data this way came from the author's
+TGSpeechBox, which applies CMU-derived stress patterns over eSpeak.
