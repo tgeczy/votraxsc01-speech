@@ -44,6 +44,15 @@ static const ttv_exception_entry k_exceptions[] = {
 	{ " SWEARS ",    " SWAIRS " },
 	{ " PEAR ",      " PAIR " },
 	{ " PEARS ",     " PAIRS " },
+	/* soft C before E: the rules give "can-SELL" (S EH L) and, for
+	 * -ed/-ing, "can-see-il" (S E I3 L).  Every screen-reader dialog has
+	 * this word; respell onto the schwa (UH2) */
+	{ " CANCEL ",     " CANSAL " },
+	{ " CANCELS ",    " CANSALS " },
+	{ " CANCELED ",   " CANSLED " },
+	{ " CANCELLED ",  " CANSLED " },
+	{ " CANCELING ",  " CANSLING " },
+	{ " CANCELLING ", " CANSLING " },
 };
 
 const char *ttv_exception(const char *spaced_word)

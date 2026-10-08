@@ -71,6 +71,12 @@ VX_API void vx_write(vx_chip *chip, uint8_t phone);
 /* Set the 2-bit inflection input. */
 VX_API void vx_inflection(vx_chip *chip, uint8_t level);
 
+/* Closure timing (src/chip/votrax.cpp, docs/closure-study.md).  Nonzero
+ * (the default) latches the closure on the patent's shared noise/closure
+ * delay, restoring the P/T/K release bursts; zero is upstream MAME's
+ * behaviour, bit for bit. */
+VX_API void vx_closure_fix(vx_chip *chip, int on);
+
 /* The A/R (acknowledge/request) line: nonzero when the chip wants the
  * next phoneme. */
 VX_API int vx_ready(vx_chip *chip);

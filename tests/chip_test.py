@@ -8,8 +8,15 @@ What they pin, silicon-side:
   * the loader rejects a corrupted ROM and names both CRCs;
   * the ready line starts asserted, drops on write, re-asserts;
   * a phone renders nonzero audio energy and STOP decays to silence;
-  * doubling the clock roughly halves a phone's duration (rate = clock).
+  * doubling the clock roughly halves a phone's duration (rate = clock);
+  * the closure fix (src/chip/votrax.cpp): off renders upstream MAME bit
+    for bit (pinned by a fingerprint taken from the unmodified file), on
+    gives K and P a release burst ahead of the vowel, which upstream
+    lacks -- so the burst check fails on upstream and passes on the fix.
 """
+
+import hashlib
+import struct
 
 import ctypes
 import os
@@ -35,6 +42,7 @@ def load():
 	lib.vx_ready.argtypes = [p]
 	lib.vx_render.restype = ctypes.c_int
 	lib.vx_render.argtypes = [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]
+	lib.vx_closure_fix.argtypes = [p, ctypes.c_int]
 	return lib
 
 
@@ -51,6 +59,43 @@ def phone_samples(lib, chip, phone, cap):
 	while not lib.vx_ready(chip) and len(out) < cap:
 		out += render(lib, chip, 256)
 	return out
+
+
+# Phone codes by name, from votrax.cpp's s_phone_table.
+PHONES = ("EH3 EH2 EH1 PA0 DT A1 A2 ZH AH2 I3 I2 I1 M N B V CH SH Z AW1 NG AH1 "
+	"OO1 OO L K J H G F D S A AY Y1 UH3 AH P O I U Y T R E W AE AE1 AW2 UH2 "
+	"UH1 UH O2 O1 IU U1 THV TH ER EH E1 AW PA1 STOP").split()
+
+# Rendered by the UNMODIFIED third_party/mame/votrax.cpp (the build before
+# src/chip existed): SHA-256 of speak(STOCK_PHRASE) as little-endian int16.
+STOCK_PHRASE = "PA1 K A1 AY Y PA0 S P E1 Y T CH PA0 T AE1 EH3 K PA0 B I3 DT UH3 N PA1"
+STOCK_SHA256 = {
+	1: "84ad7fedb0162353dd7a0b615b23c9839212375afacfc6ba9a567e64dce4e9f4",  # SC-01A
+	0: "155e8ff669e6a9664ccfe9254a40010a7d80632e62723f3d6469d8ad315dfc90",  # SC-01
+}
+
+
+def speak(lib, chip, names):
+	"""Write each phone when ready; end with STOP and 100 ms of tail."""
+	out = []
+	for name in names.split():
+		out += phone_samples(lib, chip, PHONES.index(name), 200000)
+	lib.vx_write(chip, 0x3F)
+	out += render(lib, chip, 4000)
+	return out
+
+
+def burst_lead_ms(lib, rom, variant, fix, word):
+	"""Milliseconds between the first audible sample of a stop-initial word
+	and the vowel reaching full voice: the release burst, if any."""
+	chip = lib.vx_create(variant, 720000, rom, len(rom), None, 0)
+	lib.vx_closure_fix(chip, fix)
+	phone_samples(lib, chip, PHONES.index("PA1"), 200000)
+	s = speak(lib, chip, word)
+	lib.vx_destroy(chip)
+	first = next(i for i, v in enumerate(s) if abs(v) > 200)
+	loud = next(i for i, v in enumerate(s) if abs(v) > 4000)
+	return (loud - first) / 40.0
 
 
 def main():
@@ -130,11 +175,31 @@ def main():
 			print(f"FAIL clock scaling ratio {ratio:.2f}, expected ~2")
 
 	lib.vx_destroy(chip)
+
+	# Closure fix off = upstream MAME, bit for bit.
+	chip = lib.vx_create(variant, 720000, rom, len(rom), err, 256)
+	lib.vx_closure_fix(chip, 0)
+	s = speak(lib, chip, STOCK_PHRASE)
+	lib.vx_destroy(chip)
+	got = hashlib.sha256(struct.pack(f"<{len(s)}h", *s)).hexdigest()
+	if got != STOCK_SHA256[variant]:
+		failures += 1
+		print(f"FAIL closure fix off no longer renders upstream MAME: {got}")
+
+	# Closure fix on: K and P get their release burst (upstream: ~1 ms).
+	for word in ("K A1 AY Y", "P E1 Y"):
+		on = burst_lead_ms(lib, rom, variant, 1, word)
+		off = burst_lead_ms(lib, rom, variant, 0, word)
+		if on < 20 or off > 3:
+			failures += 1
+			print(f"FAIL burst before vowel in {word!r}: fix on {on:.0f} ms "
+			      f"(want >= 20), off {off:.0f} ms (want <= 3)")
+
 	if failures:
 		print(f"chip: {failures} failure(s)")
 		return 1
-	print("chip: ROM verify, ready line, audio energy, STOP silence and "
-	      "clock scaling all pass")
+	print("chip: ROM verify, ready line, audio energy, STOP silence, "
+	      "clock scaling, upstream fingerprint and stop bursts all pass")
 	return 0
 
 

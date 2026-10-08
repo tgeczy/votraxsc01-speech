@@ -82,6 +82,12 @@ CASES = [
 	 "B EH R PA0"),
 	("wear", False,
 	 "W EH R PA0"),
+	("cancel", False,
+	 "K AE N S UH2 L PA0"),
+	("canceled", False,
+	 "K AE N S UH2 L D PA0"),
+	("cancelling", False,
+	 "K AE N S UH2 L I NG PA0"),
 	# ...and a neighbor the rules already got right, pinned so the
 	# dictionary can never overreach.
 	("earth", False,

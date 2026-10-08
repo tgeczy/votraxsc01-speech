@@ -16,7 +16,7 @@
 //     moment Speak() returns do not clip the final phoneme.
 //
 // The chip itself is the same core the NVDA add-on uses (src/core +
-// third_party/mame), linked statically -- there is no DLL chain to break.
+// src/chip), linked statically -- there is no DLL chain to break.
 //
 // Output format is fixed at 40000 Hz (the chip's rate at its 720 kHz
 // datasheet clock).  SAPI rate, by default, changes tempo at constant

@@ -8,7 +8,8 @@ add-on** and a **SAPI 5 voice**, from one shared core.
 The speech is not imitated. The core is MAME's silicon-level simulation
 of the chip (Olivier Galibert's `votrax.cpp`, BSD-3-Clause), its filters
 derived from the patent schematics and its behavior from the decapped die,
-vendored here **unmodified**. Both mask revisions are supported and appear
+vendored here **unmodified** and compiled with one marked, switchable
+correction backed by recordings of real chips (see below). Both mask revisions are supported and appear
 as separate voices — SC-01 and SC-01-A genuinely sound different, and
 neither replaces the other.
 
@@ -16,7 +17,7 @@ neither replaces the other.
 
 | Piece | Where | What it is |
 |---|---|---|
-| The chip | `third_party/mame/` + `src/shim/` | MAME's device, byte-identical, compiled outside MAME by a ~380-line `emu.h` stand-in |
+| The chip | `src/chip/` + `src/shim/` | MAME's device (upstream kept byte-identical in `third_party/mame/`), compiled outside MAME by a ~380-line `emu.h` stand-in, plus one marked closure-timing fix that restores P/T/K bursts (see [docs/closure-study.md](docs/closure-study.md)) |
 | C core | `src/core/sc01.h` | The flat API everything shares: create (CRC-verified ROM), write phoneme, poll ready, render samples |
 | Text-to-phoneme | `src/frontend/` | English text → SC-01 phoneme codes, one C implementation for all consumers |
 | Probe | `tools/say01.c` | Command line: phoneme strings or the whole 64-phone table → WAV; the reference harness |
@@ -57,14 +58,14 @@ This is a faithful reproduction of a 1980 phoneme chip, not a modern
 clear synthesizer, and some of what you hear is the chip (or the model of
 it), not the driver:
 
-- **Stops are weak.** MAME's SC-01 simulation renders the stop consonants
-  (b, d, g, k, p, t) as near-silent closures with little or no burst. So a
-  spelled letter can come out as just its vowel — "D" like "E", "K" like
-  "A" — and stops inside words are soft. This is at the silicon-model
-  level; the same weakness shows up in other SC-01 drivers and in period
-  Votrax hardware. It may improve if MAME's model does. Short of forking
-  MAME or driving a physical chip, there is nothing the driver can do
-  about a burst the chip never produces.
+- **Stops are still weak.** Upstream MAME's model kept the closure on too
+  long, so P, T and K lost the release burst the ROM programs for them
+  ("K" sounded like "A"). This build fixes the closure timing, following
+  Votrax's own patent and measured against line-in recordings of a real
+  SC-01-A at three clocks ([docs/closure-study.md](docs/closure-study.md)).
+  The bursts are back but short and, for K, quiet: Votrax gave K the least
+  noise of the three. B, D and G carry no burst in the ROM at all, so "D"
+  next to "E" is the chip itself.
 - **Words are pronounced by 1976 rules.** The text-to-phoneme stage is the
   NRL letter-to-sound rules of the Votrax era, so many words are wrong the
   way they were wrong then ("select" → "sealect"). A measured exception
@@ -78,6 +79,8 @@ it), not the driver:
 ## Design notes
 
 - `docs/shim-design.md` — how an unmodified MAME device runs outside MAME
+- `docs/closure-study.md` — the stop-consonant fix, its patent basis and the
+  measurements
 - `docs/history.md` — the chip's story and sources
 
 ## Credits

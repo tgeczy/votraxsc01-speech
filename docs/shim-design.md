@@ -5,6 +5,12 @@ the point of the whole design: the definitive SC-01 simulation keeps its
 provenance, MAME updates can be taken by copying two files, and nothing in
 the vendored code ever needs review beyond "is it still identical".
 
+(Since 2026-10-08 the build compiles `src/chip/votrax.cpp`, a copy that
+differs only in lines marked `votraxsc01:`: one closure-timing fix that
+can be switched off, documented in closure-study.md. The shim serves both
+copies alike, and taking a MAME update means re-copying `third_party/mame`
+and re-applying the marked lines.)
+
 The price is paid in `src/shim/emu.h`, and it is small — about 380 lines —
 because the shim was **measured, not designed**: before writing it, the
 vendored files were grepped for every MAME symbol they touch. The full

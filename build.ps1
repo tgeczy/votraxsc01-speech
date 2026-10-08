@@ -27,7 +27,7 @@ $inc = @(
     "/I$PSScriptRoot\src\shim",
     "/I$PSScriptRoot\src\core",
     "/I$PSScriptRoot\src\frontend",
-    "/I$PSScriptRoot\third_party\mame",
+    "/I$PSScriptRoot\src\chip",
     "/I$($msvc.FullName)\include",
     "/I$($sdk.FullName)\ucrt",
     "/I$($sdk.FullName)\um",
@@ -75,7 +75,7 @@ $core = @("$PSScriptRoot\src\core\sc01.cpp",
           "$PSScriptRoot\third_party\wasser\phoneme.c",
           "$PSScriptRoot\third_party\wasser\saynum.c",
           "$PSScriptRoot\third_party\wasser\spellword.c",
-          "$PSScriptRoot\third_party\mame\votrax.cpp")
+          "$PSScriptRoot\src\chip\votrax.cpp")   # marked copy of third_party\mame (closure fix)
 # /wd4244 and /wd4805 mirror MAME's own build settings for its sources
 # (bitswap narrowing into u8 registers is idiomatic there, not a bug).
 $cxx = @("/nologo", "/std:c++20", "/EHsc", "/O2", "/MT", "/W3", "/DUNICODE", "/D_UNICODE",

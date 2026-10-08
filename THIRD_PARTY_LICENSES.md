@@ -18,6 +18,15 @@ Keeping the files byte-identical to MAME's is a design goal — all
 adaptation lives in `src/shim/emu.h`, never in the vendored code — so that
 future MAME improvements can be picked up by copying the two files again.
 
+**What is compiled is a modified copy.** `src/chip/votrax.cpp` and
+`src/chip/votrax.h` copy the vendored files with Galibert's license and
+copyright headers intact. They differ only in lines marked `votraxsc01:`,
+which carry one closure-timing fix that can be switched off
+(`vx_closure_fix()`; off renders upstream bit for bit, which a test checks).
+The evidence for the fix is in docs/closure-study.md.
+`third_party/mame/` stays upstream's file, as the reference and the base for
+future merges.
+
 The whole of this repository is BSD-3-Clause in MAME's honor; see LICENSE.
 
 ## Wasser English-to-phoneme translation (the NRL rules in C)
