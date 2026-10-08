@@ -87,6 +87,7 @@ class _Chip:
 			("vx_inflection", None, [p, ctypes.c_ubyte]),
 			("vx_ready", ctypes.c_int, [p]),
 			("vx_render", ctypes.c_int, [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]),
+			("vx_min_hold", ctypes.c_int, [p, ctypes.c_ubyte]),
 			("ttv_translate", ctypes.c_int, [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]),
 			("ttv_spell", ctypes.c_int, [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]),
 		):
@@ -125,6 +126,9 @@ class _Chip:
 
 	def ready(self):
 		return bool(self._lib.vx_ready(self._chip))
+
+	def min_hold(self, phone):
+		return self._lib.vx_min_hold(self._chip, phone)
 
 	def render(self, count):
 		buf = (ctypes.c_int16 * count)()
@@ -518,7 +522,11 @@ class SynthDriver(BaseSynthDriver):
 				return
 			self._chip.write(phone)
 			nat = self._phone_natural.get(phone & _STOP, self._default_hold)
-			target = max(1, int(nat / self._speed))
+			# Never cut a phone before its delayed noise or voice has
+			# started: S hisses only from tick 8 of 16, T bursts from 7, so
+			# a plain nat/speed at rate 70+ silenced them ("eigh-een").
+			floor = min(nat, self._chip.min_hold(phone))
+			target = max(1, int(nat / self._speed), floor)
 			got = 0
 			while got < target and epoch == self._epoch:
 				n = min(block, target - got)

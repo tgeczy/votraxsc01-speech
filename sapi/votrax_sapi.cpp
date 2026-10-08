@@ -271,6 +271,14 @@ public:
 				if (nat <= 0)
 					nat = k_default_hold;
 				int target = (int)(nat / speed);
+				// Never cut a phone before its delayed noise or voice has
+				// started (S hisses only from tick 8 of 16, T bursts from
+				// 7); a plain nat/speed silenced them at faster rates.
+				int floor = vx_min_hold(m_chip, ph);
+				if (floor > nat)
+					floor = nat;
+				if (target < floor)
+					target = floor;
 				if (target < 1)
 					target = 1;
 				int got = 0;

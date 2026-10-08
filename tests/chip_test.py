@@ -9,6 +9,8 @@ What they pin, silicon-side:
   * the ready line starts asserted, drops on write, re-asserts;
   * a phone renders nonzero audio energy and STOP decays to silence;
   * doubling the clock roughly halves a phone's duration (rate = clock);
+  * vx_min_hold reads each phone's ROM delays (S: tick 8 + 3 of 16), and
+    an S held that long hisses where a plain half-length cut is silent;
   * the closure fix (src/chip/votrax.cpp): off renders upstream MAME bit
     for bit (pinned by a fingerprint taken from the unmodified file), on
     gives K and P a release burst ahead of the vowel, which upstream
@@ -43,6 +45,8 @@ def load():
 	lib.vx_render.restype = ctypes.c_int
 	lib.vx_render.argtypes = [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]
 	lib.vx_closure_fix.argtypes = [p, ctypes.c_int]
+	lib.vx_min_hold.restype = ctypes.c_int
+	lib.vx_min_hold.argtypes = [p, ctypes.c_ubyte]
 	return lib
 
 
@@ -176,6 +180,33 @@ def main():
 
 	lib.vx_destroy(chip)
 
+	# Minimum hold for rate-by-truncation: the later ROM delay plus three
+	# ticks, a tick being (dur*4+1) chip updates of two samples.  S: dur
+	# 29, delays 2/8 -> 11 ticks; AH: dur 76, delays 4/2 -> 7 ticks.
+	chip = lib.vx_create(variant, 720000, rom, len(rom), err, 256)
+	for name, want in (("S", 11 * 117 * 2), ("AH", 7 * 305 * 2)):
+		got = lib.vx_min_hold(chip, PHONES.index(name))
+		if got != want:
+			failures += 1
+			print(f"FAIL min hold {name}: {got} samples, want {want}")
+
+	def hiss(hold):
+		"""High-frequency energy of an S held `hold` samples, then a pause."""
+		c = lib.vx_create(variant, 720000, rom, len(rom), None, 0)
+		lib.vx_write(c, PHONES.index("S"))
+		s = render(lib, c, hold)
+		lib.vx_write(c, PHONES.index("PA0"))
+		s += render(lib, c, 4000)
+		lib.vx_destroy(c)
+		return sum((b - a) ** 2 for a, b in zip(s, s[1:]))
+	nat_s = len(phone_samples(lib, chip, PHONES.index("S"), 200000))
+	cut, held = hiss(nat_s // 2), hiss(lib.vx_min_hold(chip, PHONES.index("S")))
+	if not held > 20 * max(cut, 1):
+		failures += 1
+		print(f"FAIL an S held to its minimum should hiss far louder than one cut "
+		      f"in half: held {held}, cut {cut}")
+	lib.vx_destroy(chip)
+
 	# Closure fix off = upstream MAME, bit for bit.
 	chip = lib.vx_create(variant, 720000, rom, len(rom), err, 256)
 	lib.vx_closure_fix(chip, 0)
@@ -199,7 +230,8 @@ def main():
 		print(f"chip: {failures} failure(s)")
 		return 1
 	print("chip: ROM verify, ready line, audio energy, STOP silence, "
-	      "clock scaling, upstream fingerprint and stop bursts all pass")
+	      "clock scaling, minimum hold, upstream fingerprint and stop bursts "
+	      "all pass")
 	return 0
 
 

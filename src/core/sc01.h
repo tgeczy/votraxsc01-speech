@@ -77,6 +77,13 @@ VX_API void vx_inflection(vx_chip *chip, uint8_t level);
  * behaviour, bit for bit. */
 VX_API void vx_closure_fix(vx_chip *chip, int on);
 
+/* The shortest a phone may be held, in output samples, before the next is
+ * written early (constant-pitch rate by truncation).  Many consonants
+ * start their noise or voice only after a ROM delay -- S at tick 8 of 16,
+ * T at 7 -- so a phone cut before then never sounds at all; this is that
+ * delay plus a short rise, from the phone's own ROM fields. */
+VX_API int vx_min_hold(const vx_chip *chip, uint8_t phone);
+
 /* The A/R (acknowledge/request) line: nonzero when the chip wants the
  * next phoneme. */
 VX_API int vx_ready(vx_chip *chip);

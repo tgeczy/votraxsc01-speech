@@ -78,6 +78,7 @@ u32 declared_crc(int variant)
 
 struct vx_chip {
 	std::unique_ptr<votrax_sc01_device> device;
+	u8 rom[VX_ROM_SIZE];   // for vx_min_hold's reading of the timing fields
 };
 
 extern "C" {
@@ -114,6 +115,7 @@ vx_chip *vx_create(int variant, uint32_t clock_hz,
 	}
 
 	auto chip = new vx_chip;
+	std::memcpy(chip->rom, rom, VX_ROM_SIZE);
 	if (variant == VX_SC01A)
 		chip->device = std::make_unique<votrax_sc01a_device>(g_config, "sc01a", nullptr,
 		                                                     clock_hz ? clock_hz : VX_DEFAULT_CLOCK);
@@ -169,6 +171,36 @@ void vx_inflection(vx_chip *chip, uint8_t level)
 void vx_closure_fix(vx_chip *chip, int on)
 {
 	chip->device->set_closure_fix(on != 0);
+}
+
+int vx_min_hold(const vx_chip *chip, uint8_t phone)
+{
+	// Read the phone's timing fields exactly as votrax.cpp's phone_commit
+	// does: duration (7 bits, inverted) and the two 4-bit delays, whose
+	// bits the ROM stores reversed.
+	auto bit = [](u64 v, int b) { return (int)((v >> b) & 1); };
+	phone &= 0x3f;
+	for (int i = 0; i < 64; i++) {
+		u64 val = 0;
+		for (int b = 7; b >= 0; b--)
+			val = (val << 8) | chip->rom[i * 8 + b];
+		if (((val >> 56) & 0x3f) != phone)
+			continue;
+		int cld = bit(val, 34) << 3 | bit(val, 32) << 2 | bit(val, 30) << 1 | bit(val, 28);
+		int vd  = bit(val, 35) << 3 | bit(val, 33) << 2 | bit(val, 31) << 1 | bit(val, 29);
+		int dur = 0;
+		for (int b = 37; b <= 43; b++)
+			dur = (dur << 1) | (1 - bit(val, b));
+		// A tick is (dur*4+1) chip updates, two output samples each, at
+		// any clock.  Hold through the later delay plus three ticks for
+		// the amplitude to rise (the interpolator's time constant is
+		// ~6 ms; three ticks are 9-30 ms), never past the whole phone.
+		int ticks = (cld > vd ? cld : vd) + 3;
+		if (ticks > 16)
+			ticks = 16;
+		return ticks * (dur * 4 + 1) * 2;
+	}
+	return 0;
 }
 
 int vx_ready(vx_chip *chip)

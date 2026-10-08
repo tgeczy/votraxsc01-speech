@@ -75,8 +75,12 @@ CASES = [
 	# 1976 rules got wrong, and its own reduced vowels.
 	("seventy", False,               # rules: "SEE-ventee"
 	 "S EH V UH2 N T Y PA0"),
-	("dialog", False,                # rules: "dee-uh-log"
-	 "D AH E1 UH2 L UH3 AW G PA0"),
+	("dialog", False,                # rules: "dee-uh-log"; "eye" before a
+	 "D AH1 EH3 AY UH2 L UH3 AW G PA0"),   # vowel per Votrax's "diet"
+	("diode", False,                 # Votrax's own dictionary spelling, exactly
+	 "D AH1 EH3 AY O1 U1 D PA0"),
+	("die", False,                   # "eye" before nothing keeps NRL's AH E1
+	 "D AH E1 PA0"),
 	("city", False,                  # rules: "SIGH-tee"
 	 "S I T Y PA0"),
 	("window", False,                # rules: "WINE-doe"; OW0 keeps its quality

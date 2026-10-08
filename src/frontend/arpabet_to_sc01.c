@@ -81,6 +81,24 @@ static const ipa_rule k_rules[] = {
 	{ "",   "AY", "L",  "AH AY" },
 	{ "",   "AY", "R",  "AH I3" },
 	{ "",   "AY", "ER", "AH AY" },
+	/* Not NRL: /ai/ straight into another vowel ("dialog", "diet",
+	 * "quiet").  NRL's long AH E1 then reads as "ee-uh" ("Sia"-log);
+	 * Votrax's own dictionary spells this hiatus AH1 EH3 AY ("diet" =
+	 * D AH1 EH3 AY I2 T, "diode" = D AH1 EH3 AY O1 U1 D), chosen by ear
+	 * over its "dial" and "die" spellings. */
+	{ "",   "AY", "AX", "AH1 EH3 AY" },
+	{ "",   "AY", "IX", "AH1 EH3 AY" },
+	{ "",   "AY", "IF", "AH1 EH3 AY" },
+	{ "",   "AY", "UX", "AH1 EH3 AY" },
+	{ "",   "AY", "AA", "AH1 EH3 AY" },
+	{ "",   "AY", "AE", "AH1 EH3 AY" },
+	{ "",   "AY", "AH", "AH1 EH3 AY" },
+	{ "",   "AY", "AO", "AH1 EH3 AY" },
+	{ "",   "AY", "EH", "AH1 EH3 AY" },
+	{ "",   "AY", "IH", "AH1 EH3 AY" },
+	{ "",   "AY", "IY", "AH1 EH3 AY" },
+	{ "",   "AY", "OW", "AH1 EH3 AY" },
+	{ "",   "AY", "UW", "AH1 EH3 AY" },
 	{ "",   "AY", "",   "AH E1" },
 	{ "",   "AW", "",   "AH O1" },
 	{ "L",  "OY", "ER", "UH3 O1 AY" },
