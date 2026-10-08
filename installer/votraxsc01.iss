@@ -18,7 +18,7 @@
 #ifndef StageDir
 #define StageDir "..\build"
 #endif
-#define AppVer "1.0.2"
+#define AppVer "1.1.0"
 
 [Setup]
 AppId={{E5A0B7C2-5C01-4F6D-8B2A-90D1C4E7F3A8}

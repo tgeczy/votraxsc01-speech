@@ -1,8 +1,8 @@
 // license:BSD-3-Clause
 #include <winver.h>
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,2,0
- PRODUCTVERSION 1,0,2,0
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -15,11 +15,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "tgeczy"
       VALUE "FileDescription", "Votrax SC-01 speech core (MAME chip simulation)"
-      VALUE "FileVersion", "1.0.2.0"
+      VALUE "FileVersion", "1.1.0.0"
       VALUE "InternalName", "sc01_dll"
       VALUE "OriginalFilename", "sc01.dll"
       VALUE "ProductName", "Votrax SC-01 speech"
-      VALUE "ProductVersion", "1.0.2"
+      VALUE "ProductVersion", "1.1.0"
       VALUE "LegalCopyright", "BSD-3-Clause; chip simulation (c) Olivier Galibert / MAME project"
     END
   END
