@@ -318,6 +318,10 @@ void votrax_sc01_device::device_reset()
 	m_noise = 0;
 	m_cur_noise = false;
 
+	// votraxsc01: the release thump starts open and at rest
+	m_thump_closed = m_thump_quiet = false;
+	m_thump_x = m_thump_y = 0;
+
 	// Clear the analog level histories
 	memset(m_voice_1, 0, sizeof(m_voice_1));
 	memset(m_voice_2, 0, sizeof(m_voice_2));
@@ -422,6 +426,10 @@ void votrax_sc01_device::phone_commit()
 
 			// Hard-wired on the die, not an actual part of the rom.
 			m_rom_pause = (m_phone == 0x03) || (m_phone == 0x3e);
+
+			// votraxsc01: which phone these m_rom_* values belong to
+			// (m_phone changes at the strobe, ~0.1 ms before the commit)
+			m_rom_phone = m_phone;
 
 			LOGMASKED(LOG_COMMIT, "commit fa=%x va=%x fc=%x f1=%x f2=%x f2q=%x f3=%x dur=%02x cld=%x vd=%d cl=%d pause=%d\n", m_rom_fa, m_rom_va, m_rom_fc, m_rom_f1, m_rom_f2, m_rom_f2q, m_rom_f3, m_rom_duration, m_rom_cld, m_rom_vd, m_rom_closure, m_rom_pause);
 
@@ -588,6 +596,10 @@ void votrax_sc01_device::filters_commit(bool force)
 	}
 
 	if(force) {
+		// votraxsc01: the release thump's coupling high-pass, 3.5 ms in real
+		// time whatever the clock (see analog_calc)
+		m_thump_a = 1.0 / (1.0 + 1.0 / (0.0035 * m_sclock));
+
 		build_standard_filter(m_f4_a, m_f4_b,
 							  0,
 							  28810,
@@ -670,13 +682,45 @@ sound_stream::sample_t votrax_sc01_device::analog_calc()
 
 	// 13. Apply the glottal closure amplitude, also linear
 	vn = vn * (7 ^ (m_closure >> 2)) / 7.0;
+	double gain = (7 ^ (m_closure >> 2)) / 7.0;   // votraxsc01: for the thump
+
+	// votraxsc01: the release thump.  On the hardware the closure stage
+	// gates F4's output together with its DC bias, so opening a stop steps
+	// the bias back in, and the board's output coupling capacitor turns the
+	// step into a short low thump -- the "puh" of a P, whose own noise is
+	// faint (T's loud noise masks it).  Line-in SC-01-A recordings show it
+	// at every P release: +0.24..+0.27 of the following vowel's peak,
+	// decaying in ~2.2 ms, alike at three master clocks (so outside the
+	// chip).  Modelled as a closure-gated bias step through a 3.5 ms
+	// high-pass, only for closures a stop consonant itself asks for (its
+	// ROM closure bit): STOP (0x3f) closes every utterance and power-up
+	// starts closed, and a phone that merely inherits that closure does
+	// not count; a stop closing out of silence pre-loads the high-pass,
+	// so it thumps at its release only.  None of these click.  Amplitude 0.26
+	// fitted on one take, checked on the other two; docs/closure-study.md.
+	double thump_in = 0;
+	if(m_thump) {
+		bool was = m_thump_closed;
+		if(!m_cur_closure)
+			m_thump_closed = false;
+		else if(m_rom_closure && m_rom_phone != 0x3f)
+			m_thump_closed = true;
+		if(m_thump_closed && !was)
+			m_thump_quiet = !(m_filt_fa || m_filt_va);
+		thump_in = m_thump_closed ? -0.26 * (1.0 - gain) : 0.0;
+		if(m_thump_closed && m_thump_quiet)
+			m_thump_x = thump_in;
+	}
+	double thump = m_thump_a * (m_thump_y + thump_in - m_thump_x);
+	m_thump_x = thump_in;
+	m_thump_y = thump;
 	shift_hist(vn, m_vn_5);
 
 	// 13. Apply the final fixed filter
 	vn = apply_filter(m_vn_5, m_vn_6, m_fx_a, m_fx_b);
 	shift_hist(vn, m_vn_6);
 
-	return vn*0.35;
+	return (vn + thump)*0.35;
 }
 
 /*

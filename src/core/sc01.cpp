@@ -3,8 +3,9 @@
 //
 // sc01.cpp -- implements the flat C API of sc01.h on top of the MAME
 // device, built from src/chip/votrax.cpp: a marked copy of the vendored,
-// unmodified third_party/mame/votrax.cpp carrying one closure-timing fix
-// (switchable; off = upstream exactly).
+// unmodified third_party/mame/votrax.cpp carrying two corrections, closure
+// timing and the stop-release thump (each switchable; both off = upstream
+// exactly).
 //
 // The expected ROM CRCs are not duplicated here: they are parsed out of
 // the ROM_START blocks the MAME source itself declares, so the vendored
@@ -171,6 +172,11 @@ void vx_inflection(vx_chip *chip, uint8_t level)
 void vx_closure_fix(vx_chip *chip, int on)
 {
 	chip->device->set_closure_fix(on != 0);
+}
+
+void vx_release_thump(vx_chip *chip, int on)
+{
+	chip->device->set_release_thump(on != 0);
 }
 
 int vx_min_hold(const vx_chip *chip, uint8_t phone)

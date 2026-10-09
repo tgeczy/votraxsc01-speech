@@ -11,10 +11,13 @@ What they pin, silicon-side:
   * doubling the clock roughly halves a phone's duration (rate = clock);
   * vx_min_hold reads each phone's ROM delays (S: tick 8 + 3 of 16), and
     an S held that long hisses where a plain half-length cut is silent;
-  * the closure fix (src/chip/votrax.cpp): off renders upstream MAME bit
-    for bit (pinned by a fingerprint taken from the unmodified file), on
-    gives K and P a release burst ahead of the vowel, which upstream
-    lacks -- so the burst check fails on upstream and passes on the fix.
+  * the closure fix and release thump (src/chip/votrax.cpp): both off
+    render upstream MAME bit for bit (pinned by a fingerprint taken from
+    the unmodified file); the closure fix gives K and P a release burst
+    ahead of the vowel, and the thump a low step at a P's release, which
+    upstream lacks -- each check fails on upstream and passes on the fix;
+    the thump adds nothing before the first release or after STOP (no
+    clicks at the ends of an utterance).
 """
 
 import hashlib
@@ -45,6 +48,7 @@ def load():
 	lib.vx_render.restype = ctypes.c_int
 	lib.vx_render.argtypes = [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]
 	lib.vx_closure_fix.argtypes = [p, ctypes.c_int]
+	lib.vx_release_thump.argtypes = [p, ctypes.c_int]
 	lib.vx_min_hold.restype = ctypes.c_int
 	lib.vx_min_hold.argtypes = [p, ctypes.c_ubyte]
 	return lib
@@ -94,12 +98,52 @@ def burst_lead_ms(lib, rom, variant, fix, word):
 	and the vowel reaching full voice: the release burst, if any."""
 	chip = lib.vx_create(variant, 720000, rom, len(rom), None, 0)
 	lib.vx_closure_fix(chip, fix)
+	lib.vx_release_thump(chip, 0)
 	phone_samples(lib, chip, PHONES.index("PA1"), 200000)
 	s = speak(lib, chip, word)
 	lib.vx_destroy(chip)
 	first = next(i for i, v in enumerate(s) if abs(v) > 200)
 	loud = next(i for i, v in enumerate(s) if abs(v) > 4000)
 	return (loud - first) / 40.0
+
+
+def render_word(lib, rom, variant, word, thump):
+	chip = lib.vx_create(variant, 720000, rom, len(rom), None, 0)
+	lib.vx_release_thump(chip, thump)
+	s = speak(lib, chip, word)
+	lib.vx_destroy(chip)
+	return s
+
+
+def first_sound(s):
+	return next(k for k, v in enumerate(s) if abs(v) > 30)
+
+
+def release_after_sound(s):
+	"""End of the first silence over 30 ms after the first sound: the
+	release of a stop that follows a sound ("S P"), rendered without the
+	thump so the closure is truly silent."""
+	k = first_sound(s)
+	while k < len(s):
+		if abs(s[k]) <= 30:
+			j = k
+			while j < len(s) and abs(s[j]) <= 30:
+				j += 1
+			if j - k > 1200:
+				return j
+			k = j
+		else:
+			k += 1
+	raise RuntimeError("no stop closure found")
+
+
+def low(s, width=100):
+	"""Moving average over 2.5 ms: a crude low-pass that keeps the thump."""
+	out, acc = [], 0
+	for k, v in enumerate(s):
+		acc += v - (s[k - width] if k >= width else 0)
+		out.append(acc / width)
+	return out
 
 
 def main():
@@ -207,9 +251,10 @@ def main():
 		      f"in half: held {held}, cut {cut}")
 	lib.vx_destroy(chip)
 
-	# Closure fix off = upstream MAME, bit for bit.
+	# Closure fix and thump off = upstream MAME, bit for bit.
 	chip = lib.vx_create(variant, 720000, rom, len(rom), err, 256)
 	lib.vx_closure_fix(chip, 0)
+	lib.vx_release_thump(chip, 0)
 	s = speak(lib, chip, STOCK_PHRASE)
 	lib.vx_destroy(chip)
 	got = hashlib.sha256(struct.pack(f"<{len(s)}h", *s)).hexdigest()
@@ -226,12 +271,40 @@ def main():
 			print(f"FAIL burst before vowel in {word!r}: fix on {on:.0f} ms "
 			      f"(want >= 20), off {off:.0f} ms (want <= 3)")
 
+	# The release thump: a low step at a P's release into the vowel (the
+	# hardware's +0.24..+0.27 of the vowel peak), none without it, and
+	# nothing added before that release (the P closed out of silence) or
+	# after the utterance's closing STOP.
+	word = "PA1 S P E1 Y PA1"
+	plain = render_word(lib, rom, variant, word, 0)
+	thumped = render_word(lib, rom, variant, word, 1)
+	r = release_after_sound(plain)
+	vowel = max(abs(v) for v in plain[r + 1200:r + 5200])
+	def step(sig):
+		lp = low(sig[r - 400:r + 600])
+		return (max(lp[400:]) - sum(lp[:300]) / 300) / vowel
+	on, off = step(thumped), step(plain)
+	if on < 0.15 or abs(off) > 0.05:
+		failures += 1
+		print(f"FAIL release thump: {on:+.2f} of the vowel peak with it, "
+		      f"{off:+.2f} without (want >= +0.15 and about 0)")
+	word = "PA1 P E1 Y PA1"
+	plain = render_word(lib, rom, variant, word, 0)
+	thumped = render_word(lib, rom, variant, word, 1)
+	r = first_sound(plain)
+	before = max(abs(a - b) for a, b in zip(thumped[:r - 40], plain[:r - 40]))
+	after = max(abs(a - b) for a, b in zip(thumped[-3000:], plain[-3000:]))
+	if before > 2 or after > 2:
+		failures += 1
+		print(f"FAIL the thump must add nothing before a P closed out of "
+		      f"silence releases ({before}) or after STOP ({after})")
+
 	if failures:
 		print(f"chip: {failures} failure(s)")
 		return 1
 	print("chip: ROM verify, ready line, audio energy, STOP silence, "
-	      "clock scaling, minimum hold, upstream fingerprint and stop bursts "
-	      "all pass")
+	      "clock scaling, minimum hold, upstream fingerprint, stop bursts and "
+	      "release thump all pass")
 	return 0
 
 

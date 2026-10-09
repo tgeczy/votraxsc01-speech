@@ -6,8 +6,9 @@ provenance, MAME updates can be taken by copying two files, and nothing in
 the vendored code ever needs review beyond "is it still identical".
 
 (Since 2026-10-08 the build compiles `src/chip/votrax.cpp`, a copy that
-differs only in lines marked `votraxsc01:`: one closure-timing fix that
-can be switched off, documented in closure-study.md. The shim serves both
+differs only in lines marked `votraxsc01:`: two corrections (closure
+timing and the stop-release thump), each switchable, documented in
+closure-study.md. The shim serves both
 copies alike, and taking a MAME update means re-copying `third_party/mame`
 and re-applying the marked lines.)
 

@@ -21,8 +21,9 @@ future MAME improvements can be picked up by copying the two files again.
 **What is compiled is a modified copy.** `src/chip/votrax.cpp` and
 `src/chip/votrax.h` copy the vendored files with Galibert's license and
 copyright headers intact. They differ only in lines marked `votraxsc01:`,
-which carry one closure-timing fix that can be switched off
-(`vx_closure_fix()`; off renders upstream bit for bit, which a test checks).
+which carry two corrections that can each be switched off: closure timing
+(`vx_closure_fix()`) and the stop-release thump (`vx_release_thump()`).
+With both off they render upstream bit for bit, which a test checks.
 The evidence for the fix is in docs/closure-study.md.
 `third_party/mame/` stays upstream's file, as the reference and the base for
 future merges.

@@ -116,6 +116,74 @@ same words they are absent.
 | Release at the next phone's commit | Burst present, but a ~30 ms full-level plateau ("sharp, clipped T" by ear). |
 | Release at tick 1 of the next phone | Same plateau, slightly shorter. Preferred over the above by ear, but beaten by the fix. |
 
+## Part two: the release thump (why P sounded like T)
+
+With the bursts back, P and T still sounded alike: "P sounds just like T
+but without a top-end click", in the maintainer's words. On the hardware
+they differ clearly. In the first 8 ms of each burst, band-limited to 4.5 kHz
+like the recording, the real P's spectral centroid is 2478 Hz with low/high
+energy −4.6 dB; the real T's is 3914 Hz, −9.4 dB. The model gave both about
+3850 Hz.
+
+**What the waveform shows.** At every P release in the line-in recording, a
+low-frequency step rises and decays: a thump under the burst. At the end of
+an S that runs into a closure there is a matching downward spike. Measured
+below 300 Hz:
+
+| P release in "speech" | step, relative to the following vowel's peak | decay to 1/e |
+|---|---|---|
+| take 1 (820 kHz) | +0.24 | 2.3 ms |
+| take 2 (720 kHz) | +0.25 | 2.1 ms |
+| take 4 (521 kHz) | +0.27 | 2.1 ms |
+| T release in "Votrax", take 2 | +0.12 | 2.4 ms |
+
+The decay does not change with the master clock, although everything inside
+the chip scales with it. So it is set outside the chip, by the kind of
+coupling capacitor a board has on its output. The step's size scales with
+the sound. Together they fit a closure stage that gates F4's output together
+with a DC bias: opening a stop steps the bias back in, and the board's
+coupling turns the step into a short low thump. A P's own noise is faint
+(ROM fa=6), so on the hardware the thump is much of what makes it "puh". A
+T's loud noise (fa=15) covers it. Gevaryahu's notes on the SC-01-A also list
+a change to the DC bias. MAME's model gates a zero-mean signal, so its
+closure opens silently.
+
+**The model.** The closure-gated bias is added as its own term, run
+through a 3.5 ms one-pole high-pass, and summed at the output. The voice
+path is untouched. Fitted on take 2 alone: bias 0.26 and time constant
+3.5 ms give a +0.25 step decaying in 2.3 ms. Unchanged, the same values
+give +0.25 and +0.28 at the clocks of takes 1 and 4.
+
+**Making it click-free.** These rules came from the maintainer's ear and
+from tests. Each one fixes an audible click:
+
+- The thump follows the closure **latch**, not the closure gain. The gain
+  also fades whenever the voice and noise amplitudes reach zero, and near
+  zero it flickers in step with the pitch pulses. Gating the bias by the
+  gain gave a click train that followed the voice.
+- Only a closure that a stop asks for through its own ROM closure bit
+  counts. STOP (0x3f) also has that bit and ends every utterance, and the
+  chip powers up closed. Counting those clicked at the end of every
+  utterance, and at the start of ones that begin with a pause or a vowel.
+  The check uses the phone the ROM values were loaded for, not the phone
+  register: the register changes about 0.1 ms before the load.
+- A stop closing out of silence (an utterance that starts with "P")
+  pre-loads the high-pass, so it thumps at its release only, not when it
+  closes.
+
+**Result.** In "Please press the power button to stop the computer." the
+term adds exactly one event per stop release, plus the downward step where
+a stop closes after a sound, and nothing in the first 100 ms or after STOP.
+The maintainer judged that "P" now sounds like P and kept it.
+
+**Measured, not fixed:** the model's thump peaks about 1.5 ms after the
+release, the hardware's at 2.4–4.1 ms (a slightly duller rise). The T
+thump's size was not validated: the model's T release is dominated by
+T's own noise.
+
+`vx_release_thump(chip, 0)` turns it off. With both switches off, the output
+is upstream bit for bit.
+
 ## Remaining differences (not fixed)
 
 - The fix's bursts are 16–22 ms against the hardware's 10–12 ms.
@@ -131,10 +199,16 @@ same words they are absent.
 
 ## Reproducing
 
-`vx_closure_fix(chip, 0)` renders upstream MAME bit for bit. `chip_test.py`
-pins this with a SHA-256 fingerprint taken from the unmodified file, and
-checks that K and P get a release burst of at least 20 ms with the fix and at
-most 3 ms without it.
+`vx_closure_fix(chip, 0)` together with `vx_release_thump(chip, 0)` renders
+upstream MAME bit for bit. `chip_test.py`:
+
+- pins this with a SHA-256 fingerprint taken from the unmodified file;
+- checks that K and P get a release burst of at least 20 ms with the closure
+  fix and at most 3 ms without it;
+- checks that a P release carries a thump of at least +0.15 of the vowel's
+  peak with the thump on, and about 0 with it off;
+- checks that the thump adds nothing before a stop that closed out of
+  silence releases, and nothing after STOP.
 
 Sources: US 4,433,210 (patents.google.com/patent/US4433210A); Votrax SC-01
 data sheet (1980/1983 scans); Votrax *Phonetic Speech Dictionary for the SC-01*

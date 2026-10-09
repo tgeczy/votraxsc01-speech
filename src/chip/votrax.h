@@ -34,6 +34,9 @@ public:
 	// false = upstream MAME behaviour, bit for bit
 	void set_closure_fix(bool on) { m_closure_fix = on; }
 
+	// votraxsc01: true = the stop-release thump (default), false = upstream
+	void set_release_thump(bool on) { m_thump = on; }
+
 protected:
 	// overridable type for subclass
 	votrax_sc01_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock);
@@ -77,6 +80,10 @@ private:
 	// "Unpacked" current rom values
 	u8 m_rom_duration;                              // Duration in 5KHz units (main/144) of one tick, 16 ticks per phone, 7 bits
 	bool m_closure_fix = true;                      // votraxsc01: see votrax.cpp
+	bool m_thump = true;                            // votraxsc01: release thump, see analog_calc
+	bool m_thump_closed, m_thump_quiet;             // votraxsc01: a stop's closure is on / began in silence
+	u8 m_rom_phone;                                 // votraxsc01: the phone the m_rom_* values came from
+	double m_thump_a, m_thump_x, m_thump_y;         // votraxsc01: coupling high-pass coefficient and state
 	u8 m_rom_vd, m_rom_cld;                         // Duration in ticks of the "voice" and "closure" delays, 4 bits
 	u8 m_rom_fa, m_rom_fc, m_rom_va;                // Analog parameters, noise volume, noise freq cutoff and voice volume, 4 bits each
 	u8 m_rom_f1, m_rom_f2, m_rom_f2q, m_rom_f3;     // Analog parameters, formant frequencies and Q, 4 bits each

@@ -77,6 +77,13 @@ VX_API void vx_inflection(vx_chip *chip, uint8_t level);
  * behaviour, bit for bit. */
 VX_API void vx_closure_fix(vx_chip *chip, int on);
 
+/* The stop-release thump (src/chip/votrax.cpp, docs/closure-study.md).
+ * Nonzero (the default) adds the low "puh" a stop's release makes on the
+ * hardware -- the closure gating a DC bias, through the board's output
+ * coupling -- which is what tells P from T; zero is upstream MAME.  With
+ * both this and vx_closure_fix off, output is upstream bit for bit. */
+VX_API void vx_release_thump(vx_chip *chip, int on);
+
 /* The shortest a phone may be held, in output samples, before the next is
  * written early (constant-pitch rate by truncation).  Many consonants
  * start their noise or voice only after a ROM delay -- S at tick 8 of 16,
