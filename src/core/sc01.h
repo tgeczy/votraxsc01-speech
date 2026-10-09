@@ -84,6 +84,13 @@ VX_API void vx_closure_fix(vx_chip *chip, int on);
  * both this and vx_closure_fix off, output is upstream bit for bit. */
 VX_API void vx_release_thump(vx_chip *chip, int on);
 
+/* The noise balance (src/chip/votrax.cpp, docs/closure-study.md): nonzero
+ * (the default) brings the noise-to-voice balance toward the hardware's --
+ * a P's release becomes a soft breath, not a T-like burst, while S, Z and
+ * T keep their brightness; zero is upstream MAME.  With all three
+ * corrections off, output is upstream bit for bit. */
+VX_API void vx_noise_balance(vx_chip *chip, int on);
+
 /* The shortest a phone may be held, in output samples, before the next is
  * written early (constant-pitch rate by truncation).  Many consonants
  * start their noise or voice only after a ROM delay -- S at tick 8 of 16,

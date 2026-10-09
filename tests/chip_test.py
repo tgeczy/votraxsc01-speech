@@ -11,13 +11,14 @@ What they pin, silicon-side:
   * doubling the clock roughly halves a phone's duration (rate = clock);
   * vx_min_hold reads each phone's ROM delays (S: tick 8 + 3 of 16), and
     an S held that long hisses where a plain half-length cut is silent;
-  * the closure fix and release thump (src/chip/votrax.cpp): both off
-    render upstream MAME bit for bit (pinned by a fingerprint taken from
+  * the closure fix, release thump and noise balance (src/chip/votrax.cpp):
+    all off render upstream MAME bit for bit (pinned by a fingerprint taken from
     the unmodified file); the closure fix gives K and P a release burst
     ahead of the vowel, and the thump a low step at a P's release, which
     upstream lacks -- each check fails on upstream and passes on the fix;
     the thump adds nothing before the first release or after STOP (no
-    clicks at the ends of an utterance).
+    clicks at the ends of an utterance); the noise balance softens a P's
+    release against the vowel by >= 5 dB while S loses no more than 7 dB.
 """
 
 import hashlib
@@ -49,6 +50,7 @@ def load():
 	lib.vx_render.argtypes = [p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int]
 	lib.vx_closure_fix.argtypes = [p, ctypes.c_int]
 	lib.vx_release_thump.argtypes = [p, ctypes.c_int]
+	lib.vx_noise_balance.argtypes = [p, ctypes.c_int]
 	lib.vx_min_hold.restype = ctypes.c_int
 	lib.vx_min_hold.argtypes = [p, ctypes.c_ubyte]
 	return lib
@@ -102,14 +104,16 @@ def burst_lead_ms(lib, rom, variant, fix, word):
 	phone_samples(lib, chip, PHONES.index("PA1"), 200000)
 	s = speak(lib, chip, word)
 	lib.vx_destroy(chip)
-	first = next(i for i, v in enumerate(s) if abs(v) > 200)
+	# 32: the level NVDA's leading-silence trim treats as sound
+	first = next(i for i, v in enumerate(s) if abs(v) > 32)
 	loud = next(i for i, v in enumerate(s) if abs(v) > 4000)
 	return (loud - first) / 40.0
 
 
-def render_word(lib, rom, variant, word, thump):
+def render_word(lib, rom, variant, word, thump, balance=1):
 	chip = lib.vx_create(variant, 720000, rom, len(rom), None, 0)
 	lib.vx_release_thump(chip, thump)
+	lib.vx_noise_balance(chip, balance)
 	s = speak(lib, chip, word)
 	lib.vx_destroy(chip)
 	return s
@@ -135,6 +139,14 @@ def release_after_sound(s):
 		else:
 			k += 1
 	raise RuntimeError("no stop closure found")
+
+
+def hf_db(s, a, b):
+	"""Level of the first difference (a crude high-pass that drops the
+	voice's strong low end) over samples a..b, in dB."""
+	import math
+	d = [s[k + 1] - s[k] for k in range(a, b - 1)]
+	return 10 * math.log10(sum(v * v for v in d) / max(1, len(d)) + 1e-9)
 
 
 def low(s, width=100):
@@ -251,10 +263,11 @@ def main():
 		      f"in half: held {held}, cut {cut}")
 	lib.vx_destroy(chip)
 
-	# Closure fix and thump off = upstream MAME, bit for bit.
+	# All corrections off = upstream MAME, bit for bit.
 	chip = lib.vx_create(variant, 720000, rom, len(rom), err, 256)
 	lib.vx_closure_fix(chip, 0)
 	lib.vx_release_thump(chip, 0)
+	lib.vx_noise_balance(chip, 0)
 	s = speak(lib, chip, STOCK_PHRASE)
 	lib.vx_destroy(chip)
 	got = hashlib.sha256(struct.pack(f"<{len(s)}h", *s)).hexdigest()
@@ -299,12 +312,31 @@ def main():
 		print(f"FAIL the thump must add nothing before a P closed out of "
 		      f"silence releases ({before}) or after STOP ({after})")
 
+	# The noise balance: a P's release becomes a soft breath against its
+	# vowel (the hardware's -12 dB; upstream's was louder than the vowel)
+	# while S keeps its brightness.  Thump off, so only the noise differs.
+	def balance_levels(bal):
+		x = render_word(lib, rom, variant, "PA1 S PA1 PA1 P E1 Y PA1", 0, bal)
+		on = first_sound(x)                        # the S
+		sx = on
+		while abs(x[sx]) > 30 or any(abs(v) > 30 for v in x[sx:sx + 400]):
+			sx += 1                                 # end of the S
+		r = sx + next(k for k, v in enumerate(x[sx:]) if abs(v) > 30)   # P release
+		vowel = hf_db(x, r + 2400, r + 6400)
+		return hf_db(x, r, r + 600) - vowel, hf_db(x, on + 400, sx - 400) - vowel
+	p_off, s_off = balance_levels(0)
+	p_on, s_on = balance_levels(1)
+	if not (p_off - p_on >= 5 and s_off - s_on <= 7):
+		failures += 1
+		print(f"FAIL noise balance: P release {p_off:+.1f} -> {p_on:+.1f} dB re vowel "
+		      f"(want >= 5 dB softer), S {s_off:+.1f} -> {s_on:+.1f} (want <= 7 dB lower)")
+
 	if failures:
 		print(f"chip: {failures} failure(s)")
 		return 1
 	print("chip: ROM verify, ready line, audio energy, STOP silence, "
-	      "clock scaling, minimum hold, upstream fingerprint, stop bursts and "
-	      "release thump all pass")
+	      "clock scaling, minimum hold, upstream fingerprint, stop bursts, "
+	      "release thump and noise balance all pass")
 	return 0
 
 

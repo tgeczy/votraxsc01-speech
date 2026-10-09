@@ -17,7 +17,7 @@ neither replaces the other.
 
 | Piece | Where | What it is |
 |---|---|---|
-| The chip | `src/chip/` + `src/shim/` | MAME's device (upstream kept byte-identical in `third_party/mame/`), compiled outside MAME by a ~380-line `emu.h` stand-in, plus two marked, switchable corrections from recordings of real chips: closure timing (P/T/K bursts) and the stop-release thump (see [docs/closure-study.md](docs/closure-study.md)) |
+| The chip | `src/chip/` + `src/shim/` | MAME's device (upstream kept byte-identical in `third_party/mame/`), compiled outside MAME by a ~380-line `emu.h` stand-in, plus three marked, switchable corrections from recordings of real chips: closure timing (P/T/K bursts), the stop-release thump and the noise balance (see [docs/closure-study.md](docs/closure-study.md)) |
 | C core | `src/core/sc01.h` | The flat API everything shares: create (CRC-verified ROM), write phoneme, poll ready, render samples |
 | Text-to-phoneme | `src/frontend/` | English text → SC-01 phoneme codes, one C implementation for all consumers: the CMU Pronouncing Dictionary first, the 1976 NRL rules for everything else |
 | Probe | `tools/say01.c` | Command line: phoneme strings or the whole 64-phone table → WAV; the reference harness |
@@ -64,7 +64,9 @@ it), not the driver:
   Votrax's own patent and measured against line-in recordings of a real
   SC-01-A at three clocks ([docs/closure-study.md](docs/closure-study.md)).
   It also restores the low "thump" a real SC-01's stop release makes on its
-  board (a DC bias switched by the closure), which is what tells P from T.
+  board (a DC bias switched by the closure), and rebalances the noise
+  against the voice, so a P is a soft breath rather than a T-like burst
+  while S and Z stay bright.
   The bursts are back but short and, for K, quiet: Votrax gave K the least
   noise of the three. B, D and G carry no burst in the ROM at all, so "D"
   next to "E" is the chip itself.

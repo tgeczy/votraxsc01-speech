@@ -184,6 +184,70 @@ T's own noise.
 `vx_release_thump(chip, 0)` turns it off. With both switches off, the output
 is upstream bit for bit.
 
+## Part three: the noise balance (why P still sounded like T)
+
+The thump brought back P's low end, but in NVDA "P" still read as a soft T.
+That was true of every recording-matched change to burst colour or formant
+timing: the numbers moved, the maintainer's ear did not. One measurement
+changed the picture: the stop's level in the 25 ms between release and
+voicing (1-5.5 kHz, relative to the following vowel, 5 ms steps):
+
+| | 0 ms | 5 | 10 | 15 | 20 | 25 |
+|---|---|---|---|---|---|---|
+| real P, take 2 | -12 | -12 | -13 | -13 | -14 | -14 |
+| real P, take 4 | -11 | -7 | -9 | -10 | -7 | -6 |
+| model P | **+6** | **+11** | **+10** | -34 | -32 | -4 |
+| real T, take 2 | -5 | -7 | -11 | -14 | -16 | -13 |
+| model T | +7 | +1 | +9 | -5 | -10 | +1 |
+
+On the hardware a P is a soft breath about 12 dB under the vowel. The model's
+P was a burst louder than the vowel, followed by a hole: the shape of a T.
+MAME's own comment at the noise source says "Base intensity should be checked
+w.r.t the voice". Checked against the recordings, the noise is far too loud,
+and the excess is not uniform (1-4.5 kHz, relative to the vowel):
+
+| | real | model |
+|---|---|---|
+| S, line-in take 2 / take 4 / Count mic | -3.8 / +0.2 / -2.3 | +19.9 / +23.6 / +20.1 |
+| SH, Count mic | +4.4 | +7.6 |
+| CH, take 2 | -3.9 | +7.8 |
+
+The worst offenders, S and T and a P's release, all go through the second
+noise insertion: the path that bypasses F2 and F3. Its weight is
+`(5 + (15^fc))/20`. P is meant to route its noise through F2 (ROM fc=15),
+but two things put it into the bypass. The `5/20` floor sends a quarter of
+every phone's noise there, whatever the phone's fc. And fc is interpolated
+on the slow formant update, so a P's fc only reaches about 9 before its
+release, which sends about half its noise into the bypass. In the model a P's
+level therefore tracked S's whatever the settings (P ~ S - 12 dB). A P could
+not be softened without dulling S, which the maintainer heard straight away
+when the bypass weight alone was cut.
+
+**The correction (one switch, `vx_noise_balance`):**
+- The bypass weight is complementary to the F2 injection with no floor:
+  `(15^fc)/15`. fc=15 phones (P, SH, CH) send their noise through F2 only,
+  as their ROM asks. fc=0 phones (S, Z, T) keep the full bypass.
+- fc moves with fa: on the fast update, gated by the same delay. This is the
+  alternative the file's own "die bug" notes describe, gated as the closure
+  fix gates fa and the closure. A stop then has its own routing when it
+  releases.
+- The noise source is halved (`5e3`, not `1e4`).
+
+The ear chose the level. Halving the source ("option A") was chosen over
+x0.3, which matched the recordings' S and CH more closely but dulled S, Z and
+X. The recordings are band-limited (about 6 kHz), so they cannot show how
+bright S should be above 4.5 kHz, and the ear can.
+
+**Result** (the noise-balance test in chip_test.py; first difference,
+relative to the vowel):
+
+- A P's release goes from +11.1 dB to -13.1 dB. The hardware is about
+  -12 dB.
+- S goes from +22.5 dB to +16.4 dB. It stays bright; the hardware's S is
+  lower still in the recordings' band.
+- T stays the loudest burst. K is now soft (about -10 dB in "K AY"), where
+  the hardware's K is unknown.
+
 ## Remaining differences (not fixed)
 
 - The fix's bursts are 16–22 ms against the hardware's 10–12 ms.
@@ -199,8 +263,8 @@ is upstream bit for bit.
 
 ## Reproducing
 
-`vx_closure_fix(chip, 0)` together with `vx_release_thump(chip, 0)` renders
-upstream MAME bit for bit. `chip_test.py`:
+`vx_closure_fix(chip, 0)`, `vx_release_thump(chip, 0)` and
+`vx_noise_balance(chip, 0)` together render upstream MAME bit for bit. `chip_test.py`:
 
 - pins this with a SHA-256 fingerprint taken from the unmodified file;
 - checks that K and P get a release burst of at least 20 ms with the closure
@@ -208,7 +272,9 @@ upstream MAME bit for bit. `chip_test.py`:
 - checks that a P release carries a thump of at least +0.15 of the vowel's
   peak with the thump on, and about 0 with it off;
 - checks that the thump adds nothing before a stop that closed out of
-  silence releases, and nothing after STOP.
+  silence releases, and nothing after STOP;
+- checks that the noise balance softens a P's release by at least 5 dB
+  relative to the vowel, while S drops by no more than 7 dB.
 
 Sources: US 4,433,210 (patents.google.com/patent/US4433210A); Votrax SC-01
 data sheet (1980/1983 scans); Votrax *Phonetic Speech Dictionary for the SC-01*

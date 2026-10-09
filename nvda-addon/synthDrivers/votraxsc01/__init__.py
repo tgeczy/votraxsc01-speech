@@ -37,7 +37,7 @@ import threading
 from autoSettingsUtils.driverSetting import BooleanDriverSetting
 import config
 import nvwave
-from speech.commands import IndexCommand, CharacterModeCommand
+from speech.commands import IndexCommand, CharacterModeCommand, PitchCommand
 from synthDriverHandler import SynthDriver as BaseSynthDriver, VoiceInfo, \
 	synthIndexReached, synthDoneSpeaking
 
@@ -222,7 +222,7 @@ class SynthDriver(BaseSynthDriver):
 			defaultVal=False,
 		),
 	)
-	supportedCommands = {IndexCommand, CharacterModeCommand}
+	supportedCommands = {IndexCommand, CharacterModeCommand, PitchCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
 	@classmethod
@@ -238,6 +238,7 @@ class SynthDriver(BaseSynthDriver):
 		self._player_rate = 0
 		self._rate = 50
 		self._pitch = 33   # canonical level 1, matching NVDA's default of 50
+		self._pitch_adj = 0   # PitchCommand offset in force (capitals)
 		self._authentic = False
 		self._speed = 1.0            # truncation tempo factor (>1 faster)
 		self._phone_natural = {}     # phone -> natural length in samples
@@ -338,8 +339,12 @@ class SynthDriver(BaseSynthDriver):
 			self._speed = factor
 
 	def _apply_pitch(self):
-		# Quantize NVDA's 0..100 onto the chip's four inflection levels.
-		self._chip.inflection(min(3, self._pitch * 4 // 101))
+		# Quantize NVDA's 0..100 onto the chip's four inflection levels,
+		# with any PitchCommand offset on top: NVDA's "capital pitch change"
+		# (default 30) lifts a capital one level.  The top level has nowhere
+		# higher to go, so there it stays put.
+		pitch = min(100, max(0, self._pitch + self._pitch_adj))
+		self._chip.inflection(min(3, pitch * 4 // 101))
 
 	# ---- NVDA settings ----------------------------------------------
 	# Set-methods only record the value and enqueue a control item; the
@@ -400,6 +405,10 @@ class SynthDriver(BaseSynthDriver):
 				self._queue.put((epoch, "index", None, item.index))
 			elif isinstance(item, CharacterModeCommand):
 				spell = item.state
+			elif isinstance(item, PitchCommand):
+				# How NVDA marks a capital letter: an offset on its 0-100
+				# pitch scale before it, PitchCommand() (offset 0) after.
+				self._queue.put((epoch, "pitchadj", item.offset, None))
 		self._queue.put((epoch, "done", None, None))
 
 	def cancel(self):
@@ -438,6 +447,11 @@ class SynthDriver(BaseSynthDriver):
 				self._ensure_player()
 			elif kind == "pitch":
 				self._apply_pitch()
+			elif kind == "pitchadj":
+				# In order with the phones around it, so only the capital
+				# is raised.
+				self._pitch_adj = payload
+				self._apply_pitch()
 			elif kind == "voice":
 				self._open_voice(payload)
 			elif kind == "index":
@@ -449,6 +463,8 @@ class SynthDriver(BaseSynthDriver):
 				# then a short fixed tail so the last phone rings out.
 				self._feed(bytes([_STOP]), epoch)
 				self._render_tail(epoch, seconds=0.25)
+				self._pitch_adj = 0     # an offset never outlives its utterance
+				self._apply_pitch()
 				if epoch == self._epoch:
 					self._player.idle()
 					synthDoneSpeaking.notify(synth=self)
@@ -480,6 +496,7 @@ class SynthDriver(BaseSynthDriver):
 		pitch is re-applied.  The clock is preserved."""
 		if epoch != self._chip_epoch:
 			self._chip.reset()
+			self._pitch_adj = 0     # a cancelled utterance's capital offset
 			self._apply_pitch()
 			self._chip_epoch = epoch
 

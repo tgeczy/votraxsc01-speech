@@ -148,6 +148,11 @@ class CharacterModeCommand:
 		self.state = state
 
 
+class PitchCommand:
+	def __init__(self, offset=0):
+		self.offset = offset
+
+
 def energy(data):
 	import array
 	a = array.array("h")
@@ -231,6 +236,62 @@ def check_truncation_rate(drv):
 	return failures
 
 
+def f0(data):
+	"""Pitch of 16-bit mono audio at 40 kHz, by autocorrelation over the
+	loudest 50 ms, decimated to 10 kHz (50-250 Hz search)."""
+	import array
+	a = array.array("h")
+	a.frombytes(bytes(data))
+	x = a[::4]
+	w = 500
+	start = max(range(0, max(1, len(x) - w), 50),
+		key=lambda k: sum(abs(v) for v in x[k:k + w]), default=0)
+	seg = x[start:start + w]
+	best, lag_best = None, 0
+	for lag in range(40, 200):
+		c = sum(seg[i] * seg[i + lag] for i in range(w - lag))
+		if best is None or c > best:
+			best, lag_best = c, lag
+	return 10000.0 / lag_best
+
+
+def check_capital_pitch(drv):
+	"""NVDA's capital pitch change: a PitchCommand offset around a capital
+	raises it (one inflection level for the default 30), and the offset ends
+	with the utterance -- the next one is back at the user's pitch."""
+	failures = 0
+	synth = drv.SynthDriver()
+	try:
+		audio = bytearray()
+		real_feed = synth._player.feed
+
+		def capture(data, *a, **k):
+			audio.extend(data)
+			return real_feed(data, *a, **k)
+
+		synth._player.feed = capture
+		results = []
+		for seq in (["b"], [PitchCommand(30), "b", PitchCommand()], ["b"]):
+			audio.clear()
+			synthDoneSpeaking.events.clear()
+			synth.speak([CharacterModeCommand(True)] + seq + [CharacterModeCommand(False)])
+			for _ in range(100):
+				if synthDoneSpeaking.events:
+					break
+				time.sleep(0.02)
+			results.append(f0(audio))
+		plain, capital, after = results
+		if not capital > plain * 1.08:
+			failures += 1
+			print(f"FAIL capital pitch: {capital:.0f} Hz vs {plain:.0f} Hz plain (wanted higher)")
+		if abs(after - plain) > plain * 0.04:
+			failures += 1
+			print(f"FAIL capital pitch leaked: {after:.0f} Hz after vs {plain:.0f} Hz before")
+	finally:
+		synth.terminate()
+	return failures
+
+
 def install_stubs(configdir):
 	import builtins
 	if not hasattr(builtins, "_"):
@@ -260,7 +321,8 @@ def install_stubs(configdir):
 	speech = types.ModuleType("speech")
 	speech.__path__ = []
 	sys.modules["speech"] = speech
-	mod("speech.commands", IndexCommand=IndexCommand, CharacterModeCommand=CharacterModeCommand)
+	mod("speech.commands", IndexCommand=IndexCommand, CharacterModeCommand=CharacterModeCommand,
+		PitchCommand=PitchCommand)
 
 
 def main():
@@ -288,6 +350,7 @@ def main():
 	failures = 0
 	failures += check_chip_silence(drv)
 	failures += check_truncation_rate(drv)
+	failures += check_capital_pitch(drv)
 
 	synth = drv.SynthDriver()
 	try:
@@ -347,7 +410,8 @@ def main():
 	if failures:
 		print(f"driver_cancel: {failures} failure(s)")
 		return 1
-	print("driver_cancel: no stale feeds after cancel, prompt cancel, recovers -- pass")
+	print("driver_cancel: no stale feeds after cancel, prompt cancel, recovers, "
+	      "capital pitch -- pass")
 	return 0
 
 

@@ -492,7 +492,8 @@ void votrax_sc01_device::chip_update()
 	// noise volumes are zero.
 	if(tick_208 && (!m_rom_pause || !(m_filt_fa || m_filt_va))) {
 		// interpolate(m_cur_va,  m_rom_va);
-		interpolate(m_cur_fc,  m_rom_fc);
+		if(!m_noise_fix)   // votraxsc01: with noise balance, fc moves with fa (below)
+			interpolate(m_cur_fc,  m_rom_fc);
 		interpolate(m_cur_f1,  m_rom_f1);
 		interpolate(m_cur_f2,  m_rom_f2);
 		interpolate(m_cur_f2q, m_rom_f2q);
@@ -502,8 +503,17 @@ void votrax_sc01_device::chip_update()
 
 	// Non-formant update. Same bug there, va should be updated, not fc.
 	if(tick_625) {
-		if(m_ticks >= m_rom_vd)
+		if(m_ticks >= m_rom_vd) {
 			interpolate(m_cur_fa, m_rom_fa);
+			// votraxsc01: noise balance -- fc, which routes the noise, is a
+			// noise parameter: it moves with fa, on the fast update and the
+			// same delay (the alternative this file's "die bug" notes
+			// describe, gated as the closure fix gates fa and the closure),
+			// so a stop's noise has the routing its ROM asks for when it
+			// releases instead of drifting toward the next phone's.
+			if(m_noise_fix)
+				interpolate(m_cur_fc, m_rom_fc);
+		}
 		if(m_ticks >= m_rom_cld) {
 			// interpolate(m_cur_fc, m_rom_fc);
 			interpolate(m_cur_va, m_rom_va);
@@ -647,7 +657,12 @@ sound_stream::sample_t votrax_sc01_device::analog_calc()
 	// Noise-only path
 	// 5. Pick up the noise pitch.  Amplitude is linear.  Base
 	// intensity should be checked w.r.t the voice.
-	double n = 1e4 * ((m_pitch & 0x40 ? m_cur_noise : false) ? 1 : -1);
+	// votraxsc01: noise balance -- checked against line-in SC-01-A
+	// recordings, the noise was far louder against the voice than the
+	// hardware's (S +20 dB vs -4..0, a P's release +9 vs -12 relative to
+	// the vowel).  The excess sat mostly in the second insertion (step 11);
+	// the source is halved here.  docs/closure-study.md, part three.
+	double n = (m_noise_fix ? 5e3 : 1e4) * ((m_pitch & 0x40 ? m_cur_noise : false) ? 1 : -1);
 	n = n * m_filt_fa / 15.0;
 	shift_hist(n, m_noise_1);
 
@@ -673,7 +688,16 @@ sound_stream::sample_t votrax_sc01_device::analog_calc()
 	shift_hist(vn, m_vn_2);
 
 	// 11. Second noise insertion
-	vn += n * (5 + (15^m_filt_fc))/20.0;
+	// votraxsc01: noise balance -- complementary to the f2 injection
+	// (step 7), with no floor: fc=15 phones (P, SH, CH) send their noise
+	// through f2 only, as their ROM asks, while fc=0 phones (S, Z, T) keep
+	// the full bypass and their brightness.  Upstream's (5 + ...)/20 floor
+	// put a quarter of every phone's noise here, which made a P's release
+	// as loud and bright as a T's.
+	if(m_noise_fix)
+		vn += n * (15^m_filt_fc)/15.0;
+	else
+		vn += n * (5 + (15^m_filt_fc))/20.0;
 	shift_hist(vn, m_vn_3);
 
 	// 12. Apply the f4 filter
