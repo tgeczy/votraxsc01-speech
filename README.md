@@ -27,10 +27,14 @@ neither replaces the other.
 
 ## ROMs
 
-The chip's internal 512-byte mask ROM is required and **not included**
-(its copyright is uncleared; Votrax is long gone). See `roms/README.md`
-for the file names and CRCs — they are the standard MAME dumps. Every
-loader verifies the CRC and names the expected value when it refuses.
+The chip's internal 512-byte mask ROM is required. This **repository**
+never carries it: the dumps aren't our work, and their copyright, though
+almost certainly ownerless after four decades, is uncleared. The
+**release bundles** (the NVDA add-on and the installer) do include the
+standard MAME dumps, so the voices speak out of the box. `roms/README.md`
+has the file names and CRCs, why the dumps are treated as an orphan work,
+and a promise to remove them if a rights holder asks. Every loader
+verifies the CRC and names the expected value when it refuses.
 
 ## Building
 
