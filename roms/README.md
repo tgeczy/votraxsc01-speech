@@ -41,11 +41,13 @@ The status was researched before the first release; the short version:
   than a program.
 - **The ownership trail** dissolves: Votrax began as the Vocal division
   of Federal Screw Works, split off in 1980 as Votrax International,
-  left speech in 1984 amid restructuring, merged into Vynet (1987),
-  became Maxxar (1995), which was acquired by Open Solutions (2004),
-  acquired in turn by Fiserv (2013); the Votrax trademark lapsed in
-  2016. Federal Screw Works itself still makes fasteners in Romulus,
-  Michigan. Whatever rights exist sit unclaimed between a bolt
+  left speech in 1984 amid restructuring, merged with Vynet (1987) and
+  then Vysion (1992). Vysion went bankrupt in 1994 and came out of it as
+  Maxxar (1995), which Open Solutions acquired in 2004 and Fiserv
+  acquired in turn (2013). The VOTRAX trademark (US registration
+  0981542, registered 1974) was cancelled on 11 March 2016 for a missed
+  maintenance filing, still in the name of Federal Screw Works, which
+  makes fasteners in Romulus, Michigan. Whatever rights exist sit unclaimed between a bolt
   manufacturer and a fintech's acquisition ledger, with a 1984
   restructuring muddying which of them ever received it.
 
