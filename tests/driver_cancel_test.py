@@ -12,7 +12,7 @@ wide enough to hit on purpose; the test asserts zero feeds land after a
 cancel, both for one well-timed cancel and for many at varied phases
 (the way NVDA cancels on every keystroke).
 
-usage: python tests/driver_cancel_test.py [path-to-sc01-x64.dll]
+usage: python tests/driver_cancel_test.py [path-to-sc01.dll, x64 or x86 to match this Python]
 """
 import ctypes
 import os
@@ -32,7 +32,14 @@ class MockPlayer:
 	"""Records feeds and stops.  feed() sleeps to imitate real playback
 	taking real time, and tags each feed with whether a stop preceded it."""
 
-	def __init__(self, channels, samplesPerSec, bitsPerSample, outputDevice=None):
+	#: True imitates NVDA 2024.4 and earlier, whose WinMM player takes
+	#: buffered=; False, current NVDA, which rejects it.
+	legacy = False
+
+	def __init__(self, channels, samplesPerSec, bitsPerSample, outputDevice=None, **kw):
+		if kw and (not MockPlayer.legacy or set(kw) != {"buffered"}):
+			raise TypeError(f"unexpected keyword argument(s) {sorted(kw)}")
+		self.buffered = kw.get("buffered", False)
 		self.rate = samplesPerSec
 		self.feeds = 0
 		self.feedsAfterStop = 0
@@ -292,6 +299,30 @@ def check_capital_pitch(drv):
 	return failures
 
 
+def check_player_buffering(drv):
+	"""Old NVDA's WinMM player gets buffered=True (it crackled on a slow
+	Windows 7 machine without it); current NVDA, which rejects the
+	argument, still gets a player and speaks."""
+	failures = 0
+	for legacy in (True, False):
+		MockPlayer.legacy = legacy
+		synth = drv.SynthDriver()
+		try:
+			if synth._player.buffered != legacy:
+				failures += 1
+				print(f"FAIL player buffering: legacy={legacy} got buffered={synth._player.buffered}")
+			synthDoneSpeaking.events.clear()
+			synth.speak(["Testing."])
+			time.sleep(0.4)
+			if not synthDoneSpeaking.events or synth._player.total == 0:
+				failures += 1
+				print(f"FAIL player buffering: legacy={legacy} produced no speech")
+		finally:
+			synth.terminate()
+	MockPlayer.legacy = False
+	return failures
+
+
 def install_stubs(configdir):
 	import builtins
 	if not hasattr(builtins, "_"):
@@ -339,7 +370,9 @@ def main():
 	drvdir = os.path.join(stage, "synthDrivers", "votraxsc01")
 	os.makedirs(drvdir)
 	shutil.copy(os.path.join(REPO, "nvda-addon", "synthDrivers", "votraxsc01", "__init__.py"), drvdir)
-	shutil.copy(DLL, os.path.join(drvdir, "sc01-x64.dll"))
+	# the name the driver loads in this process (a 32-bit Python is old NVDA)
+	bits = "x64" if ctypes.sizeof(ctypes.c_void_p) == 8 else "x86"
+	shutil.copy(DLL, os.path.join(drvdir, "sc01-%s.dll" % bits))
 	for rom in ("sc01.bin", "sc01a.bin"):
 		shutil.copy(os.path.join(ROMS, rom), drvdir)
 
@@ -351,6 +384,7 @@ def main():
 	failures += check_chip_silence(drv)
 	failures += check_truncation_rate(drv)
 	failures += check_capital_pitch(drv)
+	failures += check_player_buffering(drv)
 
 	synth = drv.SynthDriver()
 	try:
@@ -411,7 +445,7 @@ def main():
 		print(f"driver_cancel: {failures} failure(s)")
 		return 1
 	print("driver_cancel: no stale feeds after cancel, prompt cancel, recovers, "
-	      "capital pitch -- pass")
+	      "capital pitch, player buffering -- pass")
 	return 0
 
 

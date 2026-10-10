@@ -292,8 +292,18 @@ class SynthDriver(BaseSynthDriver):
 		rate = self._chip.sample_rate
 		if self._player is None or self._player_rate != rate:
 			old = self._player
-			self._player = nvwave.WavePlayer(channels=1, samplesPerSec=rate,
-				bitsPerSample=16, outputDevice=_output_device())
+			fmt = dict(channels=1, samplesPerSec=rate, bitsPerSample=16,
+				outputDevice=_output_device())
+			try:
+				# NVDA 2024.4 and earlier (all that Windows 7 runs): the
+				# WinMM player plays one feed while it waits on the next,
+				# so our 12 ms blocks left a slow machine a 12 ms margin
+				# and it crackled.  buffered gathers them into 300 ms
+				# chunks, as NVDA's own eSpeak asked for there.  Later
+				# NVDA buffers in WASAPI itself and rejects the argument.
+				self._player = nvwave.WavePlayer(buffered=True, **fmt)
+			except TypeError:
+				self._player = nvwave.WavePlayer(**fmt)
 			self._player_rate = rate
 			if old:
 				old.close()
