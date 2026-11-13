@@ -22,7 +22,7 @@ neither replaces the other.
 | Text-to-phoneme | `src/frontend/` | English text → SC-01 phoneme codes, one C implementation for all consumers: the CMU Pronouncing Dictionary first, the 1976 NRL rules for everything else |
 | Probe | `tools/say01.c` | Command line: phoneme strings or the whole 64-phone table → WAV; the reference harness |
 | NVDA add-on | `nvda-addon/` | Native 64-bit driver (with a 32-bit DLL for older NVDA); constant-pitch rate by phone truncation, with an "authentic rate" option that is the master clock, exactly like the hardware |
-| SAPI 5 voice | `sapi/` | Single-file engine; JAWS word-bookmark batching, abort/skip polling and the other conventions of a tried and tested engine |
+| SAPI 5 voice | `sapi/` | Single-file engine; JAWS word-bookmark batching, rate/volume/pitch markup without stopping the chip, sentence skip, partial writes (Windows 7) and the other conventions of a tried and tested engine. `tests/sapi_requests_test.py` holds it to them through `tests/sapi_harness.cpp`, with a must-fail control per behaviour (`.\build.ps1 -Target sapitest`) |
 | Installer | `installer/` | Inno Setup: both bitnesses registered, ROMs picked up from beside the setup file |
 
 ## ROMs
@@ -41,7 +41,8 @@ verifies the CRC and names the expected value when it refuses.
 MSVC Build Tools 2022 + a Windows SDK, then:
 
 ```powershell
-.\build.ps1              # probe + core DLLs + SAPI DLLs + NVDA add-on
+.\build.ps1              # probe + core DLLs + tests + SAPI DLLs + NVDA add-on
+.\build.ps1 -Target sapitest    # only the SAPI engine's request tests and their controls
 ISCC installer\votraxsc01.iss   # the installer, afterwards
 ```
 

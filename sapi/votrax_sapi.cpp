@@ -9,11 +9,20 @@
 //     them -- fragments are BATCHED and synthesized as one utterance, and
 //     bookmark events fire at proportional byte offsets, so coarticulation
 //     survives and word tracking still works.
-//   * SPVES_ABORT / SPVES_SKIP are polled between audio chunks.
+//   * A fragment's rate, volume and pitch combine with the program's own
+//     (the rate adds, the volume is a share of it), and a change inside a
+//     request starts a new batch WITHOUT stopping the chip: its inflection
+//     input and the hold of each phone change on the fly, as they do in
+//     the NVDA driver.
+//   * SPVES_ABORT / SPVES_SKIP are polled between audio chunks.  A skip
+//     moves by sentences: a batch is rendered whole before it is written,
+//     so the share of its bytes SAPI took places us in its text.
 //   * site->Write() returning 0 bytes means "buffer full" on some hosts
-//     (Win7-era SAPI): sleep briefly and retry rather than fail.
-//   * A short silence tail is appended so hosts that stop the device the
-//     moment Speak() returns do not clip the final phoneme.
+//     (Win7-era SAPI), and it may take only a part: the rest is offered
+//     again, after a short wait when nothing was taken, rather than lost.
+//   * A short silence tail is appended (and offered until taken, like any
+//     audio) so hosts that stop the device the moment Speak() returns do
+//     not clip the final phoneme.
 //
 // The chip itself is the same core the NVDA add-on uses (src/core +
 // src/chip), linked statically -- there is no DLL chain to break.
@@ -95,8 +104,30 @@ static const variant_info k_variants[2] = {
 // effect the next time the host program starts (the label in the installer
 // says as much).  HKCU wins over HKLM, so a user can override the
 // machine-wide installer setting without admin rights.
+// Test builds only (build.ps1 -Target sapitest, /DVOTRAX_SAPI_TEST): a
+// fault put back by name, so tests/sapi_requests_test.py can prove that
+// each of its checks fails on what it guards against.  The shipped DLL has
+// no such switch.
+#ifdef VOTRAX_SAPI_TEST
+static bool test_break(const char *name)
+{
+	char value[32] = "";
+	GetEnvironmentVariableA("VOTRAX_SAPI_TEST_BREAK", value, sizeof value);
+	return !strcmp(value, name);
+}
+#else
+static bool test_break(const char *) { return false; }
+#endif
+
 static bool read_authentic_flag()
 {
+#ifdef VOTRAX_SAPI_TEST
+	// The test names the rate model itself, whatever this machine's own
+	// installed voice is set to.
+	char value[8] = "";
+	if (GetEnvironmentVariableA("VOTRAX_SAPI_TEST_AUTHENTIC", value, sizeof value))
+		return value[0] == '1';
+#endif
 	for (HKEY root : { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE }) {
 		DWORD val = 0, sz = sizeof(val);
 		if (RegGetValueW(root, L"Software\\votraxsc01", L"AuthenticRate",
@@ -210,12 +241,24 @@ public:
 	// the rate model: false = constant pitch by phone truncation (clean,
 	// the default); true = rate as the master clock (faster and higher,
 	// the 1980 hardware's one knob).
+	//
+	// `close` ends it the way the hardware would, with STOP and a ring-out.
+	// Without it the chip is left on its last phone, for a batch that
+	// follows at another rate, volume or pitch: `follows` says this is that
+	// batch.  A chip left open that nothing follows (a purge or a skip came
+	// between) is silenced first, or its last phone would glide into this
+	// utterance's first.
 	void utterance(const std::wstring &text, long rate_adj, int inflection,
-	               int volume, bool spell, bool authentic, std::vector<short> &out)
+	               int volume, bool spell, bool authentic, bool follows,
+	               bool close, std::vector<short> &out)
 	{
 		out.clear();
 		if (!m_chip)
 			return;
+		const bool was_open = m_open && follows;
+		if (m_open && !follows)
+			vx_reset(m_chip);
+		m_open = false;
 
 		double speed = std::pow(2.0, (double)rate_adj / 10.0);   // rate 10 = 2x
 		if (authentic)
@@ -228,9 +271,13 @@ public:
 		std::vector<uint8_t> phones(utf8.size() * 8 + 64);
 		int n = (spell ? ttv_spell : ttv_translate)(
 			utf8.c_str(), phones.data(), (int)phones.size());
-		if (n <= 0)
+		phones.resize(n > 0 ? n : 0);
+		// Nothing to say: nothing is rendered, unless a chip left open by
+		// the batch before has to be closed here.
+		if (phones.empty() && !(was_open && close)) {
+			m_open = was_open;
 			return;
-		phones.resize(n);
+		}
 
 		// The guard is a hard ceiling -- generous samples per phone -- so no
 		// misunderstanding of the ready line can ever hang a host.
@@ -291,10 +338,14 @@ public:
 				}
 			}
 		}
-		vx_write(m_chip, VX_PHONE_STOP);
-		for (int tail = 0; tail < (int)(vx_sample_rate(m_chip) / 4); tail += 512) {
-			int got = vx_render(m_chip, block, 512);
-			native.insert(native.end(), block, block + got);
+		if (close) {
+			vx_write(m_chip, VX_PHONE_STOP);
+			for (int tail = 0; tail < (int)(vx_sample_rate(m_chip) / 4); tail += 512) {
+				int got = vx_render(m_chip, block, 512);
+				native.insert(native.end(), block, block + got);
+			}
+		} else {
+			m_open = true;
 		}
 
 		resample(native, vx_sample_rate(m_chip), volume, out);
@@ -326,6 +377,7 @@ private:
 
 	vx_chip *m_chip = nullptr;
 	int m_variant = -1;
+	bool m_open = false;                // the last utterance was not closed
 	int m_natural[64] = { 0 };          // phone -> natural length (samples)
 	static const int k_default_hold = 3840;   // ~96 ms fallback
 };
@@ -333,6 +385,37 @@ private:
 //==========================================================================
 // the SAPI engine object
 //==========================================================================
+
+// Where a text's sentences begin, for a skip request: its first word, and
+// the first word after a full stop, a question mark or an exclamation mark
+// (with any closing quote or bracket) that white space follows.  "3.50" is
+// no boundary.
+static void sentence_starts(const std::wstring &t, std::vector<size_t> &out)
+{
+	size_t i = 0;
+	const size_t n = t.size();
+	bool start = true;
+	while (i < n) {
+		if (start) {
+			while (i < n && iswspace(t[i]))
+				i++;
+			if (i >= n)
+				break;
+			out.push_back(i);
+			start = false;
+		}
+		wchar_t c = t[i++];
+		if (c != L'.' && c != L'?' && c != L'!')
+			continue;
+		size_t j = i;
+		while (j < n && t[j] && wcschr(L".?!\"')]\x201D\x2019", t[j]))
+			j++;
+		if (j >= n || iswspace(t[j])) {
+			i = j;
+			start = true;
+		}
+	}
+}
 
 class Engine : public ISpTTSEngine, public ISpObjectWithToken
 {
@@ -444,7 +527,8 @@ public:
 		if (!m_synth.ensure(m_variant))
 			return E_FAIL;   // ROM missing/rejected; reason in last_error
 
-		// Site-level rate/volume; fragment states override per batch.
+		// The program's own rate and volume (ISpVoice::SetRate, SetVolume);
+		// a fragment's markup combines with them.
 		long site_rate = 0;
 		if (FAILED(site->GetRate(&site_rate)))
 			site_rate = 0;
@@ -453,22 +537,37 @@ public:
 		if (FAILED(site->GetVolume(&site_volume)) || site_volume > 100)
 			site_volume = 100;
 
+		// "markup": a control, the engine as it was up to 1.1.1 -- a
+		// fragment's rate or volume REPLACED the program's (<rate speed="2">
+		// under a program rate of 2 was 2, not 4; <volume level="50"> under
+		// a program volume of 50 was 50, not 25), and a batch spoke all its
+		// fragments with its first one's rate, volume and pitch.
+		const bool old_markup = test_break("markup");
+
 		// ---- Phase 1: batch the fragment list (the JAWS convention) --
+		// Fragments are joined for as long as they ask for the same rate,
+		// volume and inflection level.  Where one asks for another (a
+		// <rate>, <volume> or <pitch> inside the text) a new batch begins,
+		// and the chip is not stopped between the two.
 		struct bookmark { std::wstring mark; size_t char_offset; };
 		struct batch {
 			std::wstring text;
 			std::vector<bookmark> marks;
-			SPVSTATE state{};
+			long rate = 0;          // the program's plus the fragment's
+			int volume = 100;       // the fragment's share of the program's
+			int inflection = 1;     // the chip's 2-bit input
 			ULONG src_offset = 0;
-			bool has_state = false;
 			bool spell = false;
+			bool flows = false;     // the next batch follows with no STOP
 		};
 		std::vector<batch> batches;
 		{
 			batch cur;
-			auto flush = [&]() {
-				if (!cur.text.empty() || !cur.marks.empty())
+			auto flush = [&](bool flows) {
+				if (!cur.text.empty() || !cur.marks.empty()) {
+					cur.flows = flows && !cur.text.empty();
 					batches.push_back(std::move(cur));
+				}
 				cur = batch();
 			};
 			for (const SPVTEXTFRAG *f = frags; f; f = f->pNext) {
@@ -480,113 +579,219 @@ public:
 							cur.text.size() });
 					break;
 				case SPVA_Speak:
-					if (!cur.has_state) {
-						cur.state = f->State;
-						cur.src_offset = f->ulTextSrcOffset;
-						cur.has_state = true;
+				case SPVA_SpellOut: {
+					if (!f->pTextStart || !f->ulTextLen)
+						break;
+					const SPVSTATE &st = f->State;
+					long rate = std::clamp(site_rate + std::clamp(st.RateAdj, -10L, 10L), -10L, 10L);
+					int volume = site_volume * std::min<int>(st.Volume, 100) / 100;
+					if (old_markup) {
+						rate = st.RateAdj ? std::clamp(st.RateAdj, -10L, 10L) : site_rate;
+						volume = st.Volume != 100 ? std::min<int>(st.Volume, 100) : site_volume;
 					}
-					if (f->pTextStart && f->ulTextLen) {
+					// The 2-bit inflection input, from SAPI's pitch adjustment.
+					int inflection = std::clamp((int)st.PitchAdj.MiddleAdj / 6 + 1, 0, 3);
+					// "spell": a control, a <spell> spoken as the word.
+					bool spell = st.eAction == SPVA_SpellOut && !test_break("spell");
+					if (!cur.text.empty()) {
+						// A spelled fragment stands alone, closed on both
+						// sides as it always was; a change of voice flows.
+						if (spell || cur.spell)
+							flush(false);
+						else if (!old_markup && (rate != cur.rate || volume != cur.volume ||
+						         inflection != cur.inflection))
+							flush(true);
+					}
+					if (cur.text.empty()) {
+						cur.rate = rate;
+						cur.volume = volume;
+						cur.inflection = inflection;
+						cur.spell = spell;
+						cur.src_offset = f->ulTextSrcOffset;
+					} else if (!iswspace(cur.text.back()) && !iswspace(f->pTextStart[0])) {
 						// Words arrive as separate fragments with no
 						// whitespace; keep them from running together.
-						if (!cur.text.empty() && !iswspace(cur.text.back()) &&
-						    !iswspace(f->pTextStart[0]))
-							cur.text += L' ';
-						cur.text.append(f->pTextStart, f->ulTextLen);
+						cur.text += L' ';
 					}
-					break;
-				case SPVA_SpellOut: {
-					flush();
-					batch sb;
-					sb.state = f->State;
-					sb.src_offset = f->ulTextSrcOffset;
-					sb.has_state = true;
-					sb.spell = true;
-					if (f->pTextStart && f->ulTextLen)
-						sb.text.assign(f->pTextStart, f->ulTextLen);
-					batches.push_back(std::move(sb));
+					cur.text.append(f->pTextStart, f->ulTextLen);
 					break;
 				}
 				default:
-					flush();
+					flush(false);
 					break;
 				}
 			}
-			flush();
+			flush(false);
+		}
+
+		// Where sentences begin, for a skip: at each batch's first word and
+		// after each sentence's end in it; a spelled batch is one.
+		struct place { size_t batch, chr; };
+		std::vector<place> sentences;
+		for (size_t i = 0; i < batches.size(); i++) {
+			if (batches[i].text.empty())
+				continue;
+			if (batches[i].spell) {
+				sentences.push_back({ i, 0 });
+				continue;
+			}
+			std::vector<size_t> at;
+			sentence_starts(batches[i].text, at);
+			for (size_t chr : at)
+				sentences.push_back({ i, chr });
 		}
 
 		// ---- Phase 2: synthesize and stream each batch ---------------
 		ULONGLONG written = 0;
 		std::vector<short> audio;
-		for (batch &b : batches) {
+		size_t bi = 0, from = 0;    // the batch, and where in its text to begin
+		bool follows = false;       // the batch before flowed into this one
+		// Controls: every bookmark sent after all the audio; what Write
+		// took never looked at.
+		const bool marks_last = test_break("marks-end");
+		const bool write_once = test_break("write-once");
+		std::vector<std::wstring> held;
+
+		// A skip (ISpVoice::Skip, a reading program's "next sentence"): so
+		// many sentences on or back from the one at `chr` of batch `at`, 0
+		// for its start.  As many are skipped as the text has; if that is
+		// what was asked, speech goes on from there (true), else the call
+		// ends (SAPI 5.4, TTS Engine Vendor Porting Guide).  Up to 1.1.1
+		// every skip was answered with none done and the call ended.
+		auto skip = [&](size_t at, size_t chr) -> bool {
+			SPVSKIPTYPE type = SPVST_SENTENCE;
+			long wanted = 0, did = 0;
+			size_t cur = 0;
+			const bool known = !test_break("skip") &&      // "skip": a control
+				SUCCEEDED(site->GetSkipInfo(&type, &wanted)) &&
+				type == SPVST_SENTENCE && !sentences.empty();
+			if (known) {
+				for (size_t k = 0; k < sentences.size(); k++)
+					if (sentences[k].batch < at ||
+					    (sentences[k].batch == at && sentences[k].chr <= chr))
+						cur = k;
+				did = std::clamp(wanted, -(long)cur, (long)(sentences.size() - 1 - cur));
+			}
+			site->CompleteSkip(did);
+			if (!known || did != wanted)
+				return false;
+			bi = sentences[cur + did].batch;
+			from = sentences[cur + did].chr;
+			follows = false;
+			return true;
+		};
+
+		while (bi < batches.size()) {
+			batch &b = batches[bi];
+			const size_t begin = from;
+			from = 0;
 			DWORD actions = site->GetActions();
 			if (actions & SPVES_ABORT)
 				return S_OK;
 			if (actions & SPVES_SKIP) {
-				site->CompleteSkip(0);
-				return S_OK;
-			}
-
-			if (b.text.empty()) {
-				for (bookmark &m : b.marks)
-					fire_bookmark(site, written, m.mark);
+				if (!skip(bi, begin))
+					return S_OK;
 				continue;
 			}
 
-			long rate_adj = b.has_state && b.state.RateAdj ? b.state.RateAdj : site_rate;
-			rate_adj = std::clamp(rate_adj, -10L, 10L);
-			int volume = site_volume;
-			if (b.has_state && b.state.Volume != 100)
-				volume = std::clamp((int)b.state.Volume, 0, 100);
-			// The 2-bit inflection input, from SAPI's pitch adjustment.
-			int inflection = std::clamp(
-				(b.has_state ? (int)b.state.PitchAdj.MiddleAdj : 0) / 6 + 1, 0, 3);
+			if (b.text.empty()) {
+				for (bookmark &m : b.marks) {
+					if (marks_last)
+						held.push_back(m.mark);
+					else
+						fire_bookmark(site, written, m.mark);
+				}
+				bi++;
+				continue;
+			}
 
-			sentence_boundary(site, written, b.src_offset);
-			m_synth.utterance(b.text, rate_adj, inflection, volume, b.spell,
-				m_authentic, audio);
+			sentence_boundary(site, written, b.src_offset + (ULONG)begin);
+			m_synth.utterance(b.text.substr(begin), b.rate, b.inflection, b.volume,
+				b.spell, m_authentic, follows, !b.flows, audio);
+			follows = false;
 
-			// Bookmark byte thresholds, proportional to char position.
-			const ULONGLONG total_bytes = (ULONGLONG)audio.size() * 2;
+			// Bookmark byte thresholds, proportional to char position; the
+			// ones before `begin` are behind a skip that landed past them.
+			const BYTE *bytes = (const BYTE *)audio.data();
+			const ULONGLONG total = (ULONGLONG)audio.size() * 2;
+			const size_t chars = b.text.size() - begin;
 			size_t mi = 0;
-			const ULONGLONG start = written;
+			while (mi < b.marks.size() && b.marks[mi].char_offset < begin)
+				mi++;
 
-			size_t pos = 0;
-			while (pos < audio.size()) {
+			ULONGLONG pos = 0;
+			bool moved = false;
+			while (pos < total) {
 				actions = site->GetActions();
 				if (actions & SPVES_ABORT)
 					return S_OK;
 				if (actions & SPVES_SKIP) {
-					site->CompleteSkip(0);
-					return S_OK;
+					// The batch was rendered whole, so the share of its
+					// bytes SAPI took is the share of its text.
+					if (!skip(bi, begin + (size_t)(pos * chars / total)))
+						return S_OK;
+					moved = true;
+					break;
 				}
-				while (mi < b.marks.size() && !b.text.empty() &&
-				       written - start >= b.marks[mi].char_offset * total_bytes / b.text.size()) {
+				while (!marks_last && mi < b.marks.size() &&
+				       pos >= (b.marks[mi].char_offset - begin) * total / chars) {
 					fire_bookmark(site, written, b.marks[mi].mark);
 					mi++;
 				}
-				ULONG chunk = (ULONG)std::min<size_t>(audio.size() - pos, 2048);
+				// Bytes, not samples: a Write that takes an odd count must
+				// not shift every sample after it by a byte.
+				ULONG chunk = (ULONG)std::min<ULONGLONG>(total - pos, 4096);
 				ULONG got = 0;
-				HRESULT hr = site->Write((const BYTE *)(audio.data() + pos),
-					chunk * 2, &got);
+				HRESULT hr = site->Write(bytes + pos, chunk, &got);
 				if (FAILED(hr))
 					return hr;
+				if (got > chunk || write_once)
+					got = chunk;
 				if (got == 0) {
 					// Buffer full on Win7-era hosts: breathe and retry.
 					Sleep(5);
 					continue;
 				}
 				written += got;
-				pos += got / 2;
+				pos += got;
 			}
-			for (; mi < b.marks.size(); mi++)
-				fire_bookmark(site, written, b.marks[mi].mark);
+			if (moved)
+				continue;
+			for (; mi < b.marks.size(); mi++) {
+				if (marks_last)
+					held.push_back(b.marks[mi].mark);
+				else
+					fire_bookmark(site, written, b.marks[mi].mark);
+			}
+			follows = b.flows;
+			bi++;
 		}
+		for (const std::wstring &mark : held)
+			fire_bookmark(site, written, mark);
 
 		// Tail pad: hosts that stop the device when Speak() returns would
-		// otherwise clip the final phoneme.
+		// otherwise clip the final phoneme.  Offered until SAPI has all of
+		// it, like the audio: up to 1.1.1 it was written once, so a host
+		// that takes a part of a Write, or none while its buffer is full
+		// (Windows 7), got a part of it or none.
 		short pad[k_output_rate / 20] = {};   // 50 ms
-		ULONG got = 0;
-		site->Write((const BYTE *)pad, sizeof pad, &got);
+		const BYTE *rest = (const BYTE *)pad;
+		ULONG left = sizeof pad;
+		while (left) {
+			if (site->GetActions() & SPVES_ABORT)
+				break;
+			ULONG got = 0;
+			if (FAILED(site->Write(rest, left, &got)))
+				break;
+			if (got > left || write_once)
+				got = left;
+			if (got == 0) {
+				Sleep(5);
+				continue;
+			}
+			rest += got;
+			left -= got;
+		}
 		return S_OK;
 	}
 

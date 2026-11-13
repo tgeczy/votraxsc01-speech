@@ -5,6 +5,8 @@
 #   .\build.ps1                # probe tool + x64 core DLL
 #   .\build.ps1 -Target probe  # just tools/say01.exe
 #   .\build.ps1 -Target dll    # x64 + x86 sc01.dll (NVDA and SAPI cores)
+#   .\build.ps1 -Target sapi   # x64 + x86 votrax_sapi.dll, what the installer ships
+#   .\build.ps1 -Target sapitest   # the SAPI engine's request tests and their controls
 #
 # Everything is /MT (static CRT): NVDA does not ship the VC++ redist, and a
 # DLL that works on the dev machine but not a clean one is the bug this
@@ -192,6 +194,36 @@ if ($Target -in "sapi", "all") {
         Write-Host "built $OutDir\$arch\votrax_sapi.dll"
         Get-ChildItem "$PSScriptRoot\roms\*.bin" -ErrorAction SilentlyContinue |
             Copy-Item -Destination "$OutDir\$arch\"
+    }
+}
+
+if ($Target -in "sapitest", "all") {
+    # What SAPI can ask beyond plain text (partial writes, rate/volume/pitch
+    # markup, <spell>, skip, bookmark timing), on a TEST build of the engine:
+    # VOTRAX_SAPI_TEST compiles in the faults the test's must-fail controls
+    # put back, so this DLL lives in build\sapitest and is never shipped.
+    # The harness drives it through ISpTTSEngine with nothing registered.
+    foreach ($arch in "x64", "x86") {
+        $dir = "$OutDir\sapitest\$arch"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        Invoke-CL $arch ($cxx + @("/LD", "/DVOTRAX_SAPI_TEST") + $inc +
+            @("$PSScriptRoot\sapi\votrax_sapi.cpp") + $core +
+            @("/Fe$dir\votrax_sapi.dll", "/Fo$OutDir\obj\", "/link",
+              "/DEF:$PSScriptRoot\sapi\votrax_sapi.def",
+              "sapi.lib", "ole32.lib", "advapi32.lib", "user32.lib"))
+        Invoke-CL $arch ($cxx + $inc + @("$PSScriptRoot\tests\sapi_harness.cpp",
+            "/Fe$dir\sapi_harness.exe", "/Fo$OutDir\obj\", "/link", "sapi.lib", "ole32.lib"))
+        Get-ChildItem "$PSScriptRoot\roms\*.bin" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination "$dir\"
+    }
+    $py = "C:\Python313\python.exe"
+    if (Test-Path $py) {
+        & $py "$PSScriptRoot\tests\sapi_requests_test.py"
+        if ($LASTEXITCODE) { throw "SAPI request tests failed" }
+        & $py "$PSScriptRoot\tests\sapi_requests_test.py" --controls
+        if ($LASTEXITCODE) { throw "a SAPI request test's must-fail control passed" }
+    } else {
+        Write-Host "tests skipped: no Python at $py"
     }
 }
 
