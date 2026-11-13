@@ -151,6 +151,9 @@ PROCS = {
 	"plain@auth": [req([S(TEXT)])],
 	"rate-site@auth": [req([S(TEXT)], rate=4)],
 	"rate-frag@auth": [req([S(TEXT, rate=4)])],
+	"pitch-mid@auth": [req([S(PARTS[0]), S(PARTS[1], middle=8), S(PARTS[2])])],
+	"pitch-sep@auth": [req([S(PARTS[0])]), req([S(PARTS[1], middle=8)]), req([S(PARTS[2])])],
+	"pitch-flat@auth": [req([S(PARTS[0]), S(PARTS[1]), S(PARTS[2])])],
 }
 
 
@@ -327,6 +330,11 @@ def checks(g, both_masks):
 		whole("rate-site@auth") != fast and len(whole("rate-site@auth")) < 0.9 * len(a)
 		and whole("rate-frag@auth") == whole("rate-site@auth"),
 		"%s against %s by truncation" % (secs(len(whole("rate-site@auth"))), secs(len(fast))))
+	mid = body(g["pitch-mid@auth"][0])
+	want = sum(len(body(x)) for x in g["pitch-sep@auth"]) - 2 * TAIL
+	add("markup: authentic rate, the chip is not stopped at a pitch change either",
+		mid != body(g["pitch-flat@auth"][0]) and abs(len(mid) - want) <= RATE // 25,
+		"%s; three requests less two ring-outs are %s" % (secs(len(mid)), secs(want)))
 	return out
 
 
