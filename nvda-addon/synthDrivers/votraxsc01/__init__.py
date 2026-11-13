@@ -50,6 +50,18 @@ _STOP = 0x3F
 #: spans half to double speed, which the silicon handles happily.
 _BASE_CLOCK = 720000
 
+#: Audio goes to NVDA's player in pieces of at least this long, gathered
+#: here from the 12 ms blocks the chip is rendered in.  NVDA's WASAPI
+#: player starts the stream on the first feed: with one block as that feed,
+#: a busy machine had 12 ms to bring the next (Windows 7's audio engine
+#: takes 10 ms at a time), and the voice crunched where the SSI-263 add-ons,
+#: which feed 30 ms, played smoothly.  WASAPI is the default player from
+#: NVDA 2023.2 on, Windows 7's NVDA 2023.3 included, and there it takes
+#: buffered= and ignores it -- so the player cannot be asked to do this.
+#: The chip renders some 800 times faster than it plays, so gathering costs
+#: no time.
+_FEED_SECONDS = 0.1
+
 
 def _dll_name():
 	return "sc01-x64.dll" if ctypes.sizeof(ctypes.c_void_p) == 8 else "sc01-x86.dll"
@@ -248,6 +260,11 @@ class SynthDriver(BaseSynthDriver):
 		# carries a different epoch, the chip is still voicing the previous
 		# (cancelled) utterance's latched phone and must be silenced first.
 		self._chip_epoch = 0
+		# Audio gathered for the player (see _FEED_SECONDS), the epoch it
+		# belongs to, and the indexes waiting for it to be fed.
+		self._pending = bytearray()
+		self._pending_epoch = 0
+		self._marks = []
 		self._queue = queue.Queue()
 		_migrate_roms()
 		self._voice = next(v for v in _VOICES if _find_rom(_VOICES[v][2]))
@@ -297,10 +314,11 @@ class SynthDriver(BaseSynthDriver):
 			try:
 				# NVDA 2024.4 and earlier (all that Windows 7 runs): the
 				# WinMM player plays one feed while it waits on the next,
-				# so our 12 ms blocks left a slow machine a 12 ms margin
-				# and it crackled.  buffered gathers them into 300 ms
-				# chunks, as NVDA's own eSpeak asked for there.  Later
-				# NVDA buffers in WASAPI itself and rejects the argument.
+				# so small feeds left a slow machine no margin and it
+				# crackled.  buffered gathers them into 300 ms chunks, as
+				# NVDA's own eSpeak asked for there.  The WASAPI player of
+				# NVDA 2023.2-2024.4 takes the argument and ignores it
+				# (_FEED_SECONDS is for that one); later NVDA rejects it.
 				self._player = nvwave.WavePlayer(buffered=True, **fmt)
 			except TypeError:
 				self._player = nvwave.WavePlayer(**fmt)
@@ -453,6 +471,9 @@ class SynthDriver(BaseSynthDriver):
 			if epoch is not None and epoch != self._epoch:
 				continue
 			if kind == "rate":
+				# What was gathered is at the old sample rate, for the
+				# old player.
+				self._flush()
 				self._apply_rate()
 				self._ensure_player()
 			elif kind == "pitch":
@@ -463,9 +484,15 @@ class SynthDriver(BaseSynthDriver):
 				self._pitch_adj = payload
 				self._apply_pitch()
 			elif kind == "voice":
+				self._flush()
 				self._open_voice(payload)
 			elif kind == "index":
-				synthIndexReached.notify(synth=self, index=index)
+				# An index must not overtake audio still gathered here: it
+				# waits for that audio to be fed.
+				if self._pending and self._pending_epoch == epoch:
+					self._marks.append(index)
+				else:
+					synthIndexReached.notify(synth=self, index=index)
 			elif kind == "phones":
 				self._feed(payload, epoch)
 			elif kind == "done":
@@ -473,6 +500,7 @@ class SynthDriver(BaseSynthDriver):
 				# then a short fixed tail so the last phone rings out.
 				self._feed(bytes([_STOP]), epoch)
 				self._render_tail(epoch, seconds=0.25)
+				self._flush()
 				self._pitch_adj = 0     # an offset never outlives its utterance
 				self._apply_pitch()
 				if epoch == self._epoch:
@@ -480,16 +508,39 @@ class SynthDriver(BaseSynthDriver):
 					synthDoneSpeaking.notify(synth=self)
 
 	def _feed_player(self, data, epoch):
-		"""Chip audio straight to the player, re-checking the epoch at the
-		moment of feeding.
+		"""Chip audio towards the player: gathered until there is
+		_FEED_SECONDS of it, then fed.  The utterance's end, and a change
+		of rate or voice, feed what is left (_flush)."""
+		if epoch != self._epoch or not data:
+			return
+		if epoch != self._pending_epoch:
+			# What was gathered belongs to a cancelled utterance.
+			del self._pending[:]
+			self._marks = []
+			self._pending_epoch = epoch
+		self._pending += data
+		if len(self._pending) >= int(self._player_rate * _FEED_SECONDS) * 2:
+			self._flush()
+
+	def _flush(self):
+		"""Feed what was gathered, re-checking the epoch at the moment of
+		feeding, then report the indexes that waited on it.
 
 		A cancel can bump the epoch between the caller's check and here,
 		and audio fed to a just-stopped player starts sounding before any
 		later stop() can discard it -- heard as the previous utterance's
-		tail at the head of the next.  So drop the block if the epoch has
-		moved."""
-		if epoch == self._epoch and data:
+		tail at the head of the next.  So drop it if the epoch has moved."""
+		data, marks = bytes(self._pending), self._marks
+		del self._pending[:]
+		self._marks = []
+		if self._pending_epoch != self._epoch:
+			return
+		if data:
 			self._player.feed(data)
+		for index in marks:
+			if self._pending_epoch != self._epoch:
+				return      # cancelled while the player took the audio
+			synthIndexReached.notify(synth=self, index=index)
 
 	def _sync_chip_epoch(self, epoch):
 		"""Silence a chip left voicing a cancelled utterance.

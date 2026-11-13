@@ -47,12 +47,14 @@ class MockPlayer:
 		self.feedDelay = 0.0
 		self.closed = False
 		self.total = 0
+		self.sizes = []         # samples in each feed, in order
 
 	def feed(self, data, size=None, onDone=None):
 		if self.stopped:
 			self.feedsAfterStop += 1
 		self.feeds += 1
 		self.total += len(data) // 2
+		self.sizes.append(len(data) // 2)
 		if self.feedDelay:
 			time.sleep(self.feedDelay)
 		if onDone:
@@ -227,6 +229,7 @@ def check_truncation_rate(drv):
 			synth._chip.reset()
 			synth._player.total = 0
 			synth._feed_truncated(phones, 100)
+			synth._flush()                 # what was still gathered for the player
 			return synth._player.total
 
 		slow = samples_at(1.0)
@@ -323,6 +326,90 @@ def check_player_buffering(drv):
 	return failures
 
 
+#: The least a feed may hold, in seconds, unless it is an utterance's last.
+CUSHION = 0.1
+
+
+def check_feed_cushion(drv):
+	"""NVDA's WASAPI player starts the stream on the first feed.  It is the
+	default player from NVDA 2023.2 on -- on Windows 7's NVDA 2023.3 too,
+	where it takes buffered= and ignores it, so 1.1.1's buffered player
+	never reached it -- and the driver's first feed was one 12 ms block:
+	a busy machine had 12 ms to bring the next, and the voice crunched
+	where the SSI-263 add-ons (30 ms blocks) play smoothly.  The driver
+	now gathers its blocks itself, whatever the player: no feed but an
+	utterance's last holds less than CUSHION, an index is not reported
+	before the audio in front of it has been fed, and the audio is the
+	same samples as fed block by block.
+
+	Its must-fail control feeds each block on its own, as up to 1.1.1."""
+
+	def run():
+		"""One utterance with two indexes: (problems, samples fed)."""
+		problems = []
+		# "Hello" alone, its phones only, with the speak thread stopped.
+		synth = drv.SynthDriver()
+		synth._queue.put(None)
+		synth._thread.join(2)
+		try:
+			synth._epoch = synth._chip_epoch = 100
+			synth._chip.reset()
+			synth._feed_truncated(synth._chip.translate("Hello"), 100)
+			synth._flush()
+			hello = synth._player.total
+		finally:
+			synth.terminate()
+
+		synth = drv.SynthDriver()
+		at_index = {}
+		synthIndexReached.notify = lambda **kw: at_index.setdefault(kw["index"], synth._player.total)
+		try:
+			least = int(synth._player.rate * CUSHION)
+			synthDoneSpeaking.events.clear()
+			synth.speak(["Hello", IndexCommand(1), "world, this is a test.", IndexCommand(2)])
+			for _ in range(150):
+				if synthDoneSpeaking.events:
+					break
+				time.sleep(0.02)
+			sizes = list(synth._player.sizes)
+			ms = lambda n: n * 1000 // synth._player.rate      # noqa: E731
+			if not synthDoneSpeaking.events or not sizes:
+				problems.append("nothing was spoken")
+			elif sizes[0] < least:
+				problems.append(f"the first feed holds {ms(sizes[0])} ms (wanted {ms(least)} or more)")
+			elif min(sizes[:-1]) < least:
+				problems.append(f"a feed before the last holds {ms(min(sizes[:-1]))} ms")
+			if list(at_index) != [1, 2]:
+				problems.append(f"indexes reported: {list(at_index)} (wanted 1, 2)")
+			elif at_index[1] < hello:
+				problems.append(f"index 1 came with {at_index[1]} samples fed, before the "
+					f"{hello} of the word in front of it")
+			return problems, sum(sizes)
+		finally:
+			del synthIndexReached.notify
+			synth.terminate()
+
+	failures = 0
+	problems, total = run()
+	for p in problems:
+		failures += 1
+		print(f"FAIL feed cushion: {p}")
+	keep = drv._FEED_SECONDS
+	drv._FEED_SECONDS = 0
+	try:
+		broken, loose = run()
+	finally:
+		drv._FEED_SECONDS = keep
+	if not any("first feed" in p for p in broken):
+		failures += 1
+		print(f"FAIL feed cushion CONTROL: each block fed on its own passed ({broken}) "
+		      "-- the check is not testing it")
+	if loose != total:
+		failures += 1
+		print(f"FAIL feed cushion: {total} samples fed gathered, {loose} block by block")
+	return failures
+
+
 def install_stubs(configdir):
 	import builtins
 	if not hasattr(builtins, "_"):
@@ -385,6 +472,10 @@ def main():
 	failures += check_truncation_rate(drv)
 	failures += check_capital_pitch(drv)
 	failures += check_player_buffering(drv)
+	for legacy in (False, True):        # whatever the player, current or old
+		MockPlayer.legacy = legacy
+		failures += check_feed_cushion(drv)
+	MockPlayer.legacy = False
 
 	synth = drv.SynthDriver()
 	try:
@@ -445,7 +536,7 @@ def main():
 		print(f"driver_cancel: {failures} failure(s)")
 		return 1
 	print("driver_cancel: no stale feeds after cancel, prompt cancel, recovers, "
-	      "capital pitch, player buffering -- pass")
+	      "capital pitch, player buffering, feed cushion and its control -- pass")
 	return 0
 
 
